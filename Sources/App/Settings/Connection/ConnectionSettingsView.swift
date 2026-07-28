@@ -2,7 +2,6 @@ import HAKit
 import Shared
 import SwiftUI
 import UniformTypeIdentifiers
-import Version
 
 /// SwiftUI view for managing server connection settings
 struct ConnectionSettingsView: View {
@@ -58,13 +57,6 @@ struct ConnectionSettingsView: View {
                         Image(systemSymbol: .squareAndArrowUp)
                     }
                     .tint(.haPrimary)
-                    .modify { view in
-                        if #available(iOS 26.0, *), !Current.isCatalyst {
-                            view.buttonStyle(.glassProminent)
-                        } else {
-                            view
-                        }
-                    }
                 }
             }
         }
@@ -501,9 +493,15 @@ struct ConnectionSettingsView: View {
     private var activateSection: some View {
         Button {
             viewModel.activateServer()
+            dismissAppSettings()
         } label: {
             Text(L10n.Settings.ConnectionSection.activateServer)
         }
+    }
+
+    private func dismissAppSettings() {
+        AppSettingsPresenter.shared.isSheetPresented = false
+        AppSettingsPresenter.shared.isPushPresented = false
     }
 
     // MARK: - Delete Section
@@ -546,6 +544,29 @@ struct ConnectionSettingsView: View {
                 Text(L10n.Settings.ConnectionSection.DeleteServer.message)
             }
         }
+    }
+}
+
+extension ConnectionSettingsView: SettingsScreenSearchable {
+    static var settingsSearchEntries: [SettingsSearchEntry] {
+        [
+            SettingsSearchEntry(L10n.Settings.StatusSection.LocationNameRow.title),
+            SettingsSearchEntry(L10n.SettingsDetails.General.DeviceName.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.InternalBaseUrl.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.ExternalBaseUrl.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.ConnectionAccessSecurityLevel.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.refreshServer),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.ClientCertificate.header),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.LocationSendType.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.SensorSendType.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.connectingVia),
+            SettingsSearchEntry(L10n.Settings.StatusSection.VersionRow.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.Websocket.title),
+            SettingsSearchEntry(L10n.SettingsDetails.Notifications.LocalPush.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.Cloudhook.title),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.loggedInAs),
+            SettingsSearchEntry(L10n.Settings.ConnectionSection.DeleteServer.title),
+        ]
     }
 }
 

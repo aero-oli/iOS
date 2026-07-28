@@ -3,7 +3,6 @@ import CoreMotion
 import Foundation
 import KeychainAccess
 import UIKit
-import Version
 
 public class SettingsStore {
     let keychain = AppConstants.Keychain
@@ -196,6 +195,21 @@ public class SettingsStore {
         }
     }
 
+    /// Greets the user (toast + in-flight empty state) when flight detection determines they are on a plane.
+    /// Enabled by default; toggled in App settings > Greetings.
+    public var flightGreetingsEnabled: Bool {
+        get {
+            if let value = prefs.object(forKey: "flightGreetingsEnabled") as? NSNumber {
+                return value.boolValue
+            } else {
+                return true
+            }
+        }
+        set {
+            prefs.set(newValue, forKey: "flightGreetingsEnabled")
+        }
+    }
+
     public var restoreLastURL: Bool {
         get {
             if let value = prefs.object(forKey: "restoreLastURL") as? NSNumber {
@@ -206,6 +220,35 @@ public class SettingsStore {
         }
         set {
             prefs.set(newValue, forKey: "restoreLastURL")
+        }
+    }
+
+    /// Switches the active server to the one whose zone the user is in when the app is opened
+    /// (e.g. arriving at a second home). Off by default; toggled in Settings > Servers.
+    public var locationBasedServerSwitching: Bool {
+        get {
+            prefs.bool(forKey: "locationBasedServerSwitching")
+        }
+        set {
+            prefs.set(newValue, forKey: "locationBasedServerSwitching")
+        }
+    }
+
+    public var lastActiveServerIdentifier: String? {
+        get {
+            prefs.string(forKey: "lastActiveServerIdentifier")
+        }
+        set {
+            prefs.set(newValue, forKey: "lastActiveServerIdentifier")
+        }
+    }
+
+    public var lastActiveURLPath: String? {
+        get {
+            prefs.string(forKey: "lastActiveURLPath")
+        }
+        set {
+            prefs.set(newValue, forKey: "lastActiveURLPath")
         }
     }
 
@@ -235,12 +278,14 @@ public class SettingsStore {
         }
     }
 
-    public var edgeToEdge: Bool {
+    /// Debug override: always draw the web view below the iPhone status bar, even on cores that
+    /// support edge-to-edge display (2026.8+).
+    public var webViewAlwaysBelowStatusBar: Bool {
         get {
-            prefs.bool(forKey: "edgeToEdge_experimental")
+            prefs.bool(forKey: "webViewAlwaysBelowStatusBar")
         }
         set {
-            prefs.set(newValue, forKey: "edgeToEdge_experimental")
+            prefs.set(newValue, forKey: "webViewAlwaysBelowStatusBar")
             NotificationCenter.default.post(name: Self.webViewRelatedSettingDidChange, object: nil)
         }
     }
@@ -285,6 +330,16 @@ public class SettingsStore {
         }
         set {
             prefs.set(newValue, forKey: "migratedOptInLocalPush")
+        }
+    }
+
+    /// Shake gesture no longer opens debug by default; users who had it set to debug are reset once to none.
+    public var migratedShakeGestureToNone: Bool {
+        get {
+            prefs.bool(forKey: "migratedShakeGestureToNone")
+        }
+        set {
+            prefs.set(newValue, forKey: "migratedShakeGestureToNone")
         }
     }
 
@@ -546,13 +601,15 @@ public class SettingsStore {
         }
     }
 
-    /// Debug option to enable toasts handled by the app instead of the web frontend
-    public var toastsHandledByApp: Bool {
+    public static let defaultWebViewEmptyStateTimeout = 5
+
+    /// Seconds the frontend can stay disconnected before the web view shows its empty state
+    public var webViewEmptyStateTimeout: Int {
         get {
-            prefs.bool(forKey: "toastsHandledByApp")
+            (prefs.object(forKey: "webViewEmptyStateTimeout") as? Int) ?? Self.defaultWebViewEmptyStateTimeout
         }
         set {
-            prefs.set(newValue, forKey: "toastsHandledByApp")
+            prefs.set(newValue, forKey: "webViewEmptyStateTimeout")
         }
     }
 

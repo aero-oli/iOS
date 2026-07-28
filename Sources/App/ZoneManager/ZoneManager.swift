@@ -1,7 +1,7 @@
 import CoreLocation
 import Foundation
+import GRDB
 import PromiseKit
-import RealmSwift
 import Shared
 import UIKit
 
@@ -10,9 +10,9 @@ class ZoneManager {
     let collector: ZoneManagerCollector
     let processor: ZoneManagerProcessor
     let regionFilter: ZoneManagerRegionFilter
-    let zones: AnyRealmCollection<RLMZone>
+    private(set) var zones: [AppZone]
 
-    private var notificationTokens = [NotificationToken]()
+    private var observationToken: AnyDatabaseCancellable?
 
     init(
         locationManager: CLLocationManager = .init(),
@@ -24,11 +24,7 @@ class ZoneManager {
         self.collector = collector
         self.processor = processor
         self.regionFilter = regionFilter
-        self.zones = AnyRealmCollection(
-            Current.realm()
-                .objects(RLMZone.self)
-                .filter("TrackingEnabled == true")
-        )
+        self.zones = AppZone.trackedZones()
 
         self.collector.delegate = self
         self.processor.delegate = self
@@ -36,7 +32,6 @@ class ZoneManager {
         log(state: .initialize)
 
         updateLocationManager(isInitial: true)
-        zones.realm?.refresh()
 
         NotificationCenter.default.addObserver(
             self,
@@ -47,6 +42,7 @@ class ZoneManager {
     }
 
     deinit {
+        observationToken?.cancel()
         Current.Log.info("going away")
     }
 
@@ -70,14 +66,26 @@ class ZoneManager {
         }
 
         if isInitial {
-            notificationTokens.append(zones.observe { [weak self] change in
-                switch change {
-                case let .initial(collection), .update(let collection, deletions: _, insertions: _, modifications: _):
-                    self?.sync(zones: AnyCollection(collection))
-                case let .error(error):
+            let observation = ValueObservation.tracking { db in
+                try AppZone
+                    .filter(Column(DatabaseTables.AppZone.trackingEnabled.rawValue) == true)
+                    .fetchAll(db)
+            }
+            // .immediate delivers the initial zones synchronously (we are on the
+            // main queue), matching the previous Realm behavior of monitoring
+            // regions as soon as the manager is created.
+            observationToken = observation.start(
+                in: Current.database(),
+                scheduling: .immediate,
+                onError: { error in
                     Current.Log.error("couldn't sync zones: \(error)")
+                },
+                onChange: { [weak self] zones in
+                    guard let self else { return }
+                    self.zones = zones
+                    sync(zones: AnyCollection(zones))
                 }
-            })
+            )
         } else {
             sync(zones: AnyCollection(zones))
         }
@@ -88,44 +96,52 @@ class ZoneManager {
     }
 
     private func perform(event: ZoneManagerEvent) {
-        let logPayload: [String: String] = [
-            "start_ssid": Current.connectivity.currentWiFiSSID() ?? "none",
-            "event": event.description,
-        ]
-
         // although technically the processor also does this, it does it after some async processing.
-        // let's be very confident that we're not going to miss out on an update due to being suspended
-        Current.backgroundTask(withName: BackgroundTask.zoneManagerPerformEvent.rawValue) { _ in
+        // let's be very confident that we're not going to miss out on an update due to being suspended,
+        // so the background task starts before any asynchronous work (like fetching the current SSID).
+        let performPromise = Current.backgroundTask(withName: BackgroundTask.zoneManagerPerformEvent.rawValue) { _ in
             processor.perform(event: event)
         }.get { [weak self] _ in
             // a location change means we should consider changing our monitored regions
             // ^ not tap for this side effect because we don't want to do this on failure
             guard let self else { return }
             sync(zones: AnyCollection(zones))
-        }.then {
-            Current.clientEventStore.addEvent(ClientEvent(
-                text: "Updated location",
-                type: .locationUpdate,
-                payload: logPayload
-            ))
-            return Promise.value(())
-        }.catch { error in
-            Current.Log.error("ZoneManagerPerformEvent background task error for \(event): \(error)")
+        }
 
-            var updatedPayload = logPayload
-            updatedPayload["error"] = String(describing: error)
+        Guarantee<String?> { seal in
+            Task {
+                await seal(Current.connectivity.currentWiFiSSID())
+            }
+        }.done { currentSSID in
+            let logPayload: [String: String] = [
+                "start_ssid": currentSSID ?? "none",
+                "event": event.description,
+            ]
 
-            Current.clientEventStore.addEvent(ClientEvent(
-                text: "Didn't update: \(error.localizedDescription)",
-                type: .locationUpdate,
-                payload: updatedPayload
-            ))
+            performPromise.done {
+                Current.clientEventStore.addEvent(ClientEvent(
+                    text: "Updated location",
+                    type: .locationUpdate,
+                    payload: logPayload
+                ))
+            }.catch { error in
+                Current.Log.error("ZoneManagerPerformEvent background task error for \(event): \(error)")
 
-            Current.notificationDispatcher.send(.init(
-                id: .debug,
-                title: "DEBUG: Failed to perform ZoneManager event",
-                body: "Event: \(event.eventType.description), error: \(error.localizedDescription)"
-            ))
+                var updatedPayload = logPayload
+                updatedPayload["error"] = String(describing: error)
+
+                Current.clientEventStore.addEvent(ClientEvent(
+                    text: "Didn't update: \(error.localizedDescription)",
+                    type: .locationUpdate,
+                    payload: updatedPayload
+                ))
+
+                Current.notificationDispatcher.send(.init(
+                    id: .debug,
+                    title: "DEBUG: Failed to perform ZoneManager event",
+                    body: "Event: \(event.eventType.description), error: \(error.localizedDescription)"
+                ))
+            }
         }
     }
 
@@ -160,7 +176,7 @@ class ZoneManager {
         }
     }
 
-    private func sync(zones: AnyCollection<RLMZone>) {
+    private func sync(zones: AnyCollection<AppZone>) {
         let currentRegions = locationManager.monitoredRegions
         let desiredRegions = regionFilter.regions(
             from: zones,

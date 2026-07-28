@@ -262,3 +262,177 @@ struct WatchConfigurationViewModel_test {
         #expect(viewModel.watchConfig.items.count == 2, "Root should still have exactly 2 folders")
     }
 }
+
+struct WatchConfigAvailableItems_test {
+    @Test func encodeDecodeRoundTripPreservesGroupsAndCandidates() throws {
+        let candidate = WatchConfigAvailableItems.Candidate(
+            item: MagicItem(id: "script.open_gate", serverId: "server1", type: .entity),
+            info: .init(id: "server1-script.open_gate", name: "Open Gate", iconName: "mdi:gate"),
+            contextSubtitle: "Living Room • Gate"
+        )
+        let original = WatchConfigAvailableItems(servers: [
+            .init(serverId: "server1", serverName: "Home", candidates: [candidate]),
+            .init(serverId: "server2", serverName: "Cabin", candidates: []),
+        ])
+
+        let data = try original.encodeForWatch()
+        let decoded = try #require(WatchConfigAvailableItems.decodeForWatch(data))
+
+        #expect(decoded.servers.count == 2)
+        #expect(decoded.servers[0].serverName == "Home")
+        #expect(decoded.servers[1].candidates.isEmpty, "Empty groups must survive the round-trip")
+        #expect(decoded.allCandidates.count == 1)
+
+        let roundTripped = try #require(decoded.allCandidates.first)
+        #expect(roundTripped.item.id == "script.open_gate")
+        #expect(roundTripped.item.serverId == "server1")
+        // Regression: addable scripts/scenes/automations are stored as `.entity`, matching the iPhone.
+        #expect(roundTripped.item.type == .entity)
+        #expect(roundTripped.info.name == "Open Gate")
+        #expect(roundTripped.info.iconName == "mdi:gate")
+        #expect(roundTripped.contextSubtitle == "Living Room • Gate")
+    }
+
+    @Test func decodeInvalidDataReturnsNil() {
+        #expect(WatchConfigAvailableItems.decodeForWatch(Data([0x00, 0x01, 0x02])) == nil)
+    }
+}
+
+struct WatchDatabaseMirror_test {
+    @Test func encodeDecodeRoundTripPreservesReferenceTables() throws {
+        let entity = HAAppEntity(
+            id: "server1-script.open_gate",
+            entityId: "script.open_gate",
+            serverId: "server1",
+            domain: "script",
+            name: "Open Gate",
+            icon: "mdi:gate",
+            rawDeviceClass: nil
+        )
+        let area = AppArea(
+            id: "server1-living_room",
+            serverId: "server1",
+            areaId: "living_room",
+            name: "Living Room",
+            aliases: [],
+            picture: nil,
+            icon: nil,
+            sortOrder: 0,
+            entities: ["script.open_gate"]
+        )
+        let pipelines = AssistPipelines(
+            serverId: "server1",
+            preferredPipeline: "pref",
+            pipelines: [Pipeline(id: "pref", name: "Preferred Assistant")]
+        )
+        let original = WatchDatabaseMirror(entities: [entity], areas: [area], pipelines: [pipelines])
+
+        let data = try original.encodeForWatch()
+        let decoded = try #require(WatchDatabaseMirror.decodeForWatch(data))
+
+        #expect(decoded.entities == [entity])
+        #expect(decoded.areas == [area])
+        #expect(decoded.pipelines?.count == 1)
+        #expect(decoded.pipelines?.first?.serverId == "server1")
+        #expect(decoded.pipelines?.first?.pipelines.first?.id == "pref")
+    }
+
+    @Test func decodeInvalidDataReturnsNil() {
+        #expect(WatchDatabaseMirror.decodeForWatch(Data([0x00, 0x01, 0x02])) == nil)
+    }
+
+    @Test func partialMirrorRoundTripsNilTablesAsRetain() throws {
+        // A delta payload: only areas carried, everything else omitted (nil = retain on the watch).
+        let area = AppArea(
+            id: "server1-kitchen",
+            serverId: "server1",
+            areaId: "kitchen",
+            name: "Kitchen",
+            aliases: [],
+            picture: nil,
+            icon: nil,
+            sortOrder: 0,
+            entities: []
+        )
+        let original = WatchDatabaseMirror(entities: nil, areas: [area], pipelines: nil)
+
+        let decoded = try WatchDatabaseMirror.decodeForWatchThrowing(original.encodeForWatch())
+        #expect(decoded.entities == nil)
+        #expect(decoded.areas == [area])
+        #expect(decoded.pipelines == nil)
+    }
+
+    @Test func digestsMatchForEqualContentAndDifferOtherwise() {
+        let entity = HAAppEntity(
+            id: "server1-script.a",
+            entityId: "script.a",
+            serverId: "server1",
+            domain: "script",
+            name: "A",
+            icon: nil,
+            rawDeviceClass: nil
+        )
+        let mirror = WatchDatabaseMirror(entities: [entity], areas: [], pipelines: [])
+        let same = WatchDatabaseMirror(entities: [entity], areas: [], pipelines: [])
+        var changed = mirror
+        changed.entities = []
+
+        #expect(mirror.tableDigests()["entities"] == same.tableDigests()["entities"])
+        #expect(mirror.tableDigests()["entities"] != changed.tableDigests()["entities"])
+        // nil groups produce no digest, so they can never match and are always carried.
+        #expect(WatchDatabaseMirror(entities: nil, areas: [], pipelines: []).tableDigests()["entities"] == nil)
+    }
+
+    @Test func omittingTablesDropsOnlyPositiveDigestMatches() {
+        let mirror = WatchDatabaseMirror(entities: [], areas: [], pipelines: [])
+        let digests = mirror.tableDigests()
+
+        // Watch echoes matching digests for entities+areas but a stale one for pipelines.
+        var stored = digests
+        stored["pipelines"] = "stale"
+        let delta = mirror.omittingTables(matching: stored, currentDigests: digests)
+        #expect(delta.entities == nil)
+        #expect(delta.areas == nil)
+        #expect(delta.pipelines?.isEmpty == true)
+
+        // No stored digests at all → nothing is omitted.
+        let full = mirror.omittingTables(matching: [:], currentDigests: digests)
+        #expect(full.entities == [])
+        #expect(full.areas == [])
+        #expect(full.pipelines?.isEmpty == true)
+    }
+}
+
+struct WatchConfigLayout_test {
+    @Test func resolvedLayoutDefaultsToListWhenUnset() {
+        let config = WatchConfig()
+        #expect(config.layout == nil)
+        #expect(config.resolvedLayout == .list)
+    }
+
+    @Test func resolvedLayoutReturnsStoredValue() {
+        #expect(WatchConfig(layout: .grid).resolvedLayout == .grid)
+        #expect(WatchConfig(layout: .list).resolvedLayout == .list)
+    }
+
+    @Test func encodeForWatchRoundTripPreservesLayout() throws {
+        let original = WatchConfig(items: [], layout: .grid)
+        let data = try original.encodeForWatch()
+        let decoded = try #require(WatchConfig.decodeForWatch(data))
+        #expect(decoded.resolvedLayout == .grid)
+    }
+}
+
+struct WatchConfigLastModified_test {
+    @Test func stampModifiedUsesCurrentDate() {
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let previousDate = Current.date
+        Current.date = { fixedDate }
+        defer { Current.date = previousDate }
+
+        var config = WatchConfig()
+        #expect(config.lastModified == nil)
+        config.stampModified()
+        #expect(config.lastModified == fixedDate.timeIntervalSince1970)
+    }
+}

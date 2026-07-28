@@ -2,6 +2,7 @@
 import ActivityKit
 import Foundation
 import PromiseKit
+import SharedPush
 
 // MARK: - HandlerStartOrUpdateLiveActivity
 
@@ -50,11 +51,15 @@ struct HandlerStartOrUpdateLiveActivity: NotificationCommandHandler {
                         return
                     }
 
+                    // In-app path handles APNs (foreground willPresent already plays the sound and
+                    // suppresses the banner; background shows the system banner). Alerting is owned
+                    // there, so the ActivityKit alert is only used on the local-push drain path.
                     let presented = try await Current.liveActivityRegistry?.startOrUpdate(
                         tag: request.tag,
                         title: request.title,
                         serverWebhookId: request.serverWebhookId,
-                        state: request.state
+                        state: request.state,
+                        alert: false
                     )
                     if presented == true {
                         LiveActivityPendingStart.confirmLocalPushDelivery(for: request)
@@ -94,7 +99,8 @@ struct HandlerStartOrUpdateLiveActivity: NotificationCommandHandler {
             title: title,
             serverWebhookId: payload["webhook_id"] as? String,
             state: contentState(from: payload),
-            confirmID: payload[LocalPushManager.confirmIDUserInfoKey] as? String
+            confirmID: payload[LocalPushManager.confirmIDUserInfoKey] as? String,
+            alert: (payload["silent"] as? Bool) != true
         )
     }
 
@@ -129,23 +135,34 @@ struct HandlerStartOrUpdateLiveActivity: NotificationCommandHandler {
         let title = (payload["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         let message = payload["message"] as? String ?? ""
         let criticalText = payload["critical_text"] as? String
-        // Use NSNumber coercion so both Int and Double JSON values (e.g. 50 vs 50.0) decode correctly.
-        let progress = (payload["progress"] as? NSNumber).map { Int(truncating: $0) }
-        let progressMax = (payload["progress_max"] as? NSNumber).map { Int(truncating: $0) }
+        // Round so both Int and Double JSON values (e.g. 50 vs 50.9) map to the nearest Int, matching
+        // the OS-side content-state decoder in HALiveActivityAttributes.ContentState.
+        let progress = (payload["progress"] as? NSNumber).flatMap { Int(exactly: $0.doubleValue.rounded()) }
+        let progressMax = (payload["progress_max"] as? NSNumber).flatMap { Int(exactly: $0.doubleValue.rounded()) }
         let chronometer = payload["chronometer"] as? Bool
-        let icon = payload["notification_icon"] as? String
-        let color = payload["notification_icon_color"] as? String
+        let icon = payload[NotificationPayloadKey.notificationIcon.rawValue] as? String
+        let color = payload[NotificationPayloadKey.notificationIconColor.rawValue] as? String
         let url = payload["url"] as? String
         let backgroundColor = payload["background_color"] as? String
         let textColor = payload["text_color"] as? String
         let progressBarColor = payload["progress_bar_color"] as? String
+        let progressBarDirection = payload["progress_bar_direction"] as? String
 
-        // `when` + `when_relative` → absolute countdown end date.
+        // `when` + `when_relative` → absolute timer end date.
         // Parsed as Double to preserve sub-second Unix timestamps sent by HA.
+        // A negative relative `when` is a bounded count-up: the timer counts up from now
+        // toward `|when|` seconds and freezes there — the sign is the direction, the
+        // magnitude is the duration. (Negative values never rendered before this existed,
+        // so the encoding is backward-compatible; Android shows an unbounded count-up.)
         var countdownEnd: Date?
+        var chronometerStart: Date?
         if let when = (payload["when"] as? NSNumber).map(\.doubleValue) {
             let whenRelative = payload["when_relative"] as? Bool ?? false
-            if whenRelative {
+            if whenRelative, when < 0 {
+                let now = Date()
+                chronometerStart = now
+                countdownEnd = now.addingTimeInterval(-when)
+            } else if whenRelative {
                 countdownEnd = Date().addingTimeInterval(when)
             } else {
                 countdownEnd = Date(timeIntervalSince1970: when)
@@ -160,12 +177,14 @@ struct HandlerStartOrUpdateLiveActivity: NotificationCommandHandler {
             progressMax: progressMax,
             chronometer: chronometer,
             countdownEnd: countdownEnd,
+            chronometerStart: chronometerStart,
             icon: icon,
             color: color,
             url: url,
             backgroundColor: backgroundColor,
             textColor: textColor,
-            progressBarColor: progressBarColor
+            progressBarColor: progressBarColor,
+            progressBarDirection: progressBarDirection
         )
     }
 }

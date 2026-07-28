@@ -1,5 +1,4 @@
 import CallbackURLKit
-import Communicator
 import FirebaseMessaging
 import Foundation
 import MediaPlayer
@@ -52,6 +51,9 @@ class NotificationManager: NSObject, LocalPushManagerDelegate {
     func setupNotifications() {
         UNUserNotificationCenter.current().delegate = self
         _ = localPushManager
+        if Manager.shared.callbackURLScheme == nil {
+            Manager.shared.callbackURLScheme = Manager.urlSchemes?.first
+        }
     }
 
     @objc private func didBecomeActive() {
@@ -69,11 +71,6 @@ class NotificationManager: NSObject, LocalPushManagerDelegate {
     }
 
     private func openCamera(from userInfo: [AnyHashable: Any]?) {
-        guard #available(iOS 16.0, *) else {
-            Current.Log.info("Ignoring kiosk_show_camera command because camera player requires iOS 16")
-            return
-        }
-
         guard let entityId = cameraEntityId(from: userInfo) else {
             Current.Log.error("Received kiosk_show_camera command without a valid camera entity_id")
             return
@@ -174,8 +171,8 @@ class NotificationManager: NSObject, LocalPushManagerDelegate {
 
     private func hideCamera() {
         Current.sceneManager.webViewControllerPromise
-            .done { webViewController in
-                guard let cameraOverlayController = self.cameraOverlayController,
+            .done { [weak self] webViewController in
+                guard let cameraOverlayController = self?.cameraOverlayController,
                       webViewController.overlayedController === cameraOverlayController else {
                     Current.Log.info("Ignoring kiosk_hide_camera command because no camera is on display")
                     Current.kiosk.setCameraOverlayVisible(false)
@@ -413,6 +410,25 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
             return
         }
 
+        #if DEBUG
+        if response.actionIdentifier == NotificationSnoozeAction.debugTenSecondsActionIdentifier {
+            Current.notificationDispatcher.reschedule(response.notification.request.content, after: 10)
+            completionHandler()
+            return
+        }
+        #endif
+
+        // Snooze is an on-device-only convenience: reschedule a local re-delivery of the same
+        // notification (so it keeps its snooze actions) and skip forwarding to Home Assistant.
+        if let minutes = NotificationSnoozeAction.minutes(fromActionIdentifier: response.actionIdentifier) {
+            Current.notificationDispatcher.reschedule(
+                response.notification.request.content,
+                after: TimeInterval(minutes) * 60
+            )
+            completionHandler()
+            return
+        }
+
         let userInfo = response.notification.request.content.userInfo
 
         Current.Log.verbose("User info in incoming notification \(userInfo) with response \(response)")
@@ -566,7 +582,7 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
 
         if #available(iOS 18, *) {
             let identifier = notification.request.identifier
-            let symbol = command.symbol.rawValue
+            let symbol = command.symbol
             let colors = (command.symbolForegroundStyle.primary, command.symbolForegroundStyle.secondary)
             let title = command.localizedString
             let subtitle = command.localizedSubtitle
@@ -606,6 +622,18 @@ extension NotificationManager: UNUserNotificationCenterDelegate {
                 setSystemVolume(level)
             } else {
                 Current.Log.error("Ignoring \(command.rawValue): missing or invalid volume in payload")
+            }
+        case .setScreensaverMode:
+            if let mode = command.screensaverMode(from: userInfo) {
+                Current.kiosk.setScreensaverMode(mode)
+            } else {
+                Current.Log.error("Ignoring \(command.rawValue): missing or invalid mode in payload")
+            }
+        case .setScreensaverBrightness:
+            if let level = command.level(from: userInfo) {
+                Current.kiosk.setScreensaverDimLevel(Double(level))
+            } else {
+                Current.Log.error("Ignoring \(command.rawValue): missing or invalid level in payload")
             }
         case .reload:
             Current.sceneManager.webViewControllerPromise.done { $0.refresh() }

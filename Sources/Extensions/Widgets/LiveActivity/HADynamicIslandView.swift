@@ -110,10 +110,9 @@ struct HACompactTrailingView: View {
 
     var body: some View {
         if state.chronometer == true, let end = state.countdownEnd {
-            Text(timerInterval: Date.now ... end, countsDown: true)
+            HAActivityChronometerText(end: end, start: state.chronometerStart)
                 .font(.footnote.monospacedDigit())
                 .foregroundStyle(.white)
-                .contentTransition(.numericText(countsDown: true))
                 .frame(width: Self.compactTrailingTimerWidth)
         } else if let critical = state.criticalText {
             Text(critical)
@@ -137,16 +136,16 @@ struct HAExpandedTrailingView: View {
     let state: HALiveActivityAttributes.ContentState
     private let minimumScaleFactor: CGFloat = 0.7
     var body: some View {
-        if let fraction = state.progressFraction {
-            Text(HAActivityVisualStyle.percentString(for: fraction))
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(.white)
-                .minimumScaleFactor(minimumScaleFactor)
-        } else if let critical = state.criticalText {
+        if let critical = state.criticalText {
             Text(critical)
                 .font(.headline)
                 .foregroundStyle(.white)
                 .lineLimit(1)
+                .minimumScaleFactor(minimumScaleFactor)
+        } else if let fraction = state.progressFraction {
+            Text(HAActivityVisualStyle.percentString(for: fraction))
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(.white)
                 .minimumScaleFactor(minimumScaleFactor)
         }
     }
@@ -161,29 +160,35 @@ struct HAExpandedBottomView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignSystem.Spaces.one) {
             if state.chronometer == true, let end = state.countdownEnd {
-                Text(timerInterval: Date.now ... end, countsDown: true)
+                HAActivityChronometerText(end: end, start: state.chronometerStart)
                     .font(.title3.monospacedDigit().weight(.medium))
                     .foregroundStyle(.white)
-                    .contentTransition(.numericText(countsDown: true))
             } else {
                 Text(state.message)
                     .font(.body)
                     .foregroundStyle(.white.opacity(0.88))
                     .lineLimit(2)
             }
-
-            if let fraction = state.progressFraction {
-                HAActivityProgressBar(
-                    fraction: fraction,
-                    fillColor: barColor,
-                    trackColor: .white.opacity(0.16),
-                    height: 8
-                )
-            } else if state.chronometer == true, let end = state.countdownEnd {
-                HAActivityTimerProgressBar(end: end, tint: barColor)
+            Group {
+                if let fraction = state.progressBarFillFraction {
+                    HAActivityProgressBar(
+                        fraction: fraction,
+                        fillColor: barColor,
+                        trackColor: .white.opacity(0.16),
+                        height: 8
+                    )
+                } else if state.chronometer == true, let end = state.countdownEnd {
+                    HAActivityTimerProgressBar(
+                        start: state.chronometerStart,
+                        end: end,
+                        tint: barColor,
+                        direction: state.resolvedProgressBarDirection
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical)
     }
 
     /// Progress bar tint: `progress_bar_color`, else the icon color, else HA blue.

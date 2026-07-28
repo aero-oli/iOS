@@ -1,26 +1,10 @@
 import CarPlay
 import Combine
-import Communicator
 import GRDB
 import HAKit
 import PromiseKit
 import Shared
 
-enum CarPlaySupportedDomains {
-    static var all: [Domain] = [
-        .light,
-        .button,
-        .cover,
-        .inputBoolean,
-        .inputButton,
-        .lock,
-        .scene,
-        .script,
-        .switch,
-    ]
-}
-
-@available(iOS 16.0, *)
 class CarPlaySceneDelegate: UIResponder {
     private var interfaceController: CPInterfaceController?
     private var entitiesSubscriptionToken: HACancellable?
@@ -30,7 +14,7 @@ class CarPlaySceneDelegate: UIResponder {
     private var serversListTemplate: (any CarPlayTemplateProvider)?
     private var quickAccessListTemplate: (any CarPlayTemplateProvider)?
     private var areasZonesListTemplate: (any CarPlayTemplateProvider)?
-    private var includedDomains: [Domain] = CarPlaySupportedDomains.all
+    private var includedDomains: [Domain] = Domain.carPlaySupported
 
     private var allTemplates: [any CarPlayTemplateProvider] {
         [
@@ -63,7 +47,17 @@ class CarPlaySceneDelegate: UIResponder {
         if let config {
             subscribeToQuickAccessEntitiesChanges(configEntities: config.quickAccessItems)
             guard config != cachedConfig else { return }
+            let previousTabs = cachedConfig?.tabs
             cachedConfig = config
+
+            // Content-only changes (quick access items, layout, add/edit visibility) don't alter the tab
+            // structure, so refresh the existing providers instead of replacing the root template. Replacing
+            // the root mid-transition (e.g. while the in-car add item flow is dismissing its confirmation and
+            // popping back) fails silently and leaves the CarPlay screen blank.
+            if previousTabs == config.tabs {
+                updateTemplates()
+                return
+            }
 
             // Tabs can be removed from the configuration while their template instances are still
             // cached on the scene delegate. Clear those references before rebuilding so hidden
@@ -99,6 +93,9 @@ class CarPlaySceneDelegate: UIResponder {
             }
         } else {
             subscribeToQuickAccessEntitiesChanges(configEntities: [])
+            // The no-config tab set below differs from any stored config's tabs; clear the cache so a config
+            // appearing later always rebuilds instead of matching a stale tab comparison.
+            cachedConfig = nil
             buildQuickAccessTab()
             buildServerTab()
             visibleTemplates = allTemplates
@@ -243,7 +240,9 @@ class CarPlaySceneDelegate: UIResponder {
 
     private func observeCarPlayConfigChanges() {
         configObservation?.cancel()
-        let observation = ValueObservation.tracking(CarPlayConfig.fetchOne)
+        let observation = ValueObservation.tracking { db in
+            try CarPlayConfig.fetchOne(db)
+        }
         configObservation = observation.start(
             in: Current.database(),
             onError: { error in
@@ -259,7 +258,6 @@ class CarPlaySceneDelegate: UIResponder {
 
 // MARK: - CPTemplateApplicationSceneDelegate
 
-@available(iOS 16.0, *)
 extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
     func templateApplicationScene(
         _ templateApplicationScene: CPTemplateApplicationScene,
@@ -274,7 +272,6 @@ extension CarPlaySceneDelegate: CPTemplateApplicationSceneDelegate {
     }
 }
 
-@available(iOS 16.0, *)
 extension CarPlaySceneDelegate: CPInterfaceControllerDelegate {
     func templateWillDisappear(_ aTemplate: CPTemplate, animated: Bool) {
         allTemplates.forEach { $0.templateWillDisappear(template: aTemplate) }

@@ -16,7 +16,6 @@ final class OnboardingServersListViewModel: ObservableObject {
     @Published var showError = false
     @Published var error: Error?
 
-    @Published var showPermissionsFlow = false
     @Published var shouldDismiss = false
     @Published var onboardingServer: Server?
 
@@ -28,6 +27,8 @@ final class OnboardingServersListViewModel: ObservableObject {
     private var discovery = Current.bonjour()
     private var cancellables = Set<AnyCancellable>()
     private let shouldDismissOnSuccess: Bool
+    /// The presenter driving the auth flow's pushed screens; owned by the view, set for each attempt.
+    private weak var authPresenter: OnboardingAuthPresenter?
 
     init(shouldDismissOnSuccess: Bool) {
         self.shouldDismissOnSuccess = shouldDismissOnSuccess
@@ -78,20 +79,29 @@ final class OnboardingServersListViewModel: ObservableObject {
         discovery.stop()
     }
 
-    func selectInstance(_ instance: DiscoveredHomeAssistant, presentingController: UIViewController) {
+    /// Restarts discovery without clearing already-discovered instances — used when the servers list
+    /// reappears after an auth flow page above it was popped (being covered stops discovery).
+    func resumeDiscovery() {
+        discovery.start()
+    }
+
+    func selectInstance(_ instance: DiscoveredHomeAssistant, presenter: OnboardingAuthPresenter) {
         Current.Log.verbose("Selected instance \(instance)")
 
         currentlyInstanceLoading = instance
+        authPresenter = presenter
 
         let authentication = OnboardingAuth()
 
-        authentication.authenticate(to: instance, sender: presentingController).pipe { [weak self] result in
+        authentication.authenticate(to: instance, presenter: presenter).pipe { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
                 case let .fulfilled(server):
                     Current.Log.verbose("Onboarding authentication succeeded")
                     self?.authenticationSucceeded(server: server)
                 case let .rejected(error):
+                    // The flow is over; pop whatever auth pages are still pushed.
+                    presenter.popAuthFlow()
                     if let pmkError = error as? PMKError, pmkError.isCancelled {
                         /* No action needed, user cancelled flow */
                         self?.resetFlow()
@@ -120,7 +130,8 @@ final class OnboardingServersListViewModel: ObservableObject {
         discovery.stop()
         onboardingServer = server
         disableNonEssentialSensors(server)
-        showPermissionsFlow = true
+        // Advance the pushed auth flow directly into the permissions steps.
+        authPresenter?.push(.permissions(server))
     }
 
     private func disableNonEssentialSensors(_ server: Server) {
@@ -179,8 +190,15 @@ extension OnboardingServersListViewModel: SensorObserver {
 
 extension OnboardingServersListViewModel: OnboardingStateObserver {
     func onboardingStateDidChange(to state: OnboardingState) {
-        if state == .complete, shouldDismissOnSuccess {
-            shouldDismiss = true
+        guard state == .complete else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if shouldDismissOnSuccess {
+                shouldDismiss = true
+            }
+            if let onboardingServer {
+                Current.appDatabaseUpdater.update(server: onboardingServer, forceUpdate: true, showProgress: false)
+            }
         }
     }
 }

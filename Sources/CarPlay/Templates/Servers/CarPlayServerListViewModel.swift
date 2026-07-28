@@ -3,7 +3,6 @@ import Foundation
 import HAKit
 import Shared
 
-@available(iOS 16.0, *)
 final class CarPlayServerListViewModel {
     weak var templateProvider: CarPlayServersListTemplate?
     weak var interfaceController: CPInterfaceController?
@@ -159,6 +158,30 @@ final class CarPlayServerListViewModel {
         tabs.filter { $0 != .settings } + [.settings]
     }
 
+    var showAddEditButtons: Bool {
+        do {
+            return try CarPlayConfig.config()?.resolvedShowAddEditButtons ?? CarPlayConfig()
+                .resolvedShowAddEditButtons
+        } catch {
+            Current.Log.error("Failed to fetch CarPlay show add/edit setting: \(error.localizedDescription)")
+            return CarPlayConfig().resolvedShowAddEditButtons
+        }
+    }
+
+    func toggleShowAddEditButtons() {
+        let newValue = !showAddEditButtons
+        do {
+            var config = try CarPlayConfig.config() ?? CarPlayConfig()
+            config.showAddEditButtons = newValue
+            try Current.database().write { db in
+                try config.insert(db, onConflict: .replace)
+            }
+            templateProvider?.update()
+        } catch {
+            Current.Log.error("Failed to update CarPlay show add/edit setting: \(error.localizedDescription)")
+        }
+    }
+
     var ttsPlaybackStrategy: CarPlayAssistTTSPlaybackStrategy {
         Current.settingsStore.carPlayAssistDebugSettings.ttsPlaybackStrategy
     }
@@ -171,7 +194,6 @@ final class CarPlayServerListViewModel {
     }
 }
 
-@available(iOS 16.0, *)
 extension CarPlayServerListViewModel: ServerObserver {
     func serversDidChange(_ serverManager: ServerManager) {
         guard let server = serverManager.serverOrFirstIfAvailable(

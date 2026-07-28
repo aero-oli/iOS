@@ -42,6 +42,7 @@ final class WebViewExternalMessageHandlerTests: XCTestCase {
 
         wait(for: [settingsShown], timeout: 1)
         XCTAssertTrue(coordinator.showSettingsCalled)
+        XCTAssertTrue(coordinator.showSettingsPushedOntoNavigationStack)
     }
 
     @MainActor func testHandleExternalMessageThemeUpdateNotifyThemeColors() {
@@ -54,6 +55,19 @@ final class WebViewExternalMessageHandlerTests: XCTestCase {
         sut.handleExternalMessage(dictionary)
 
         XCTAssertEqual(mockWebViewController.lastEvaluatedJavaScriptScript, "notifyThemeColors()")
+    }
+
+    @MainActor func testHandleExternalMessageFrontendLoadedMarksFrontendLoaded() {
+        let dictionary: [String: Any] = [
+            "id": 1,
+            "message": "",
+            "command": "",
+            "type": "frontend/loaded",
+        ]
+
+        sut.handleExternalMessage(dictionary)
+
+        XCTAssertEqual(mockWebViewController.lastSettingButtonState, FrontEndConnectionState.loaded.rawValue)
     }
 
     @MainActor func testHandleExternalMessageBarCodeScanPresentsScanner() {

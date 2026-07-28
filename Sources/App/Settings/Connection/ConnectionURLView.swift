@@ -34,7 +34,7 @@ struct ConnectionURLView: View {
         .alert(L10n.Settings.ConnectionSection.ValidateError.title, isPresented: $viewModel.showError) {
             if viewModel.canCommitAnyway {
                 Button(L10n.Settings.ConnectionSection.ValidateError.useAnyway) {
-                    viewModel.save(onSuccess: {
+                    viewModel.commitAnyway(onSuccess: {
                         dismiss()
                     })
                 }
@@ -218,13 +218,6 @@ struct ConnectionURLView: View {
                 })
             }
             .tint(.haPrimary)
-            .modify { view in
-                if #available(iOS 26.0, *) {
-                    view.buttonStyle(.glassProminent)
-                } else {
-                    view
-                }
-            }
         }
     }
 

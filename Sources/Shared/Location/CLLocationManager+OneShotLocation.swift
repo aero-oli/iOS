@@ -4,10 +4,20 @@ import PromiseKit
 
 public extension CLLocationManager {
     static func oneShotLocation(timeout: TimeInterval) -> Promise<CLLocation> {
-        OneShotLocationProxy(
-            locationManager: CLLocationManager(),
-            timeout: after(seconds: timeout)
-        ).promise
+        // The proxy asserts main-thread invariants (CLLocationManager delegate callbacks need the main
+        // run loop), but callers reach this from promise chains and Swift concurrency tasks on
+        // arbitrary queues — which crashed in the field. Hop to main instead of trapping; stay
+        // synchronous when already there.
+        let makeProxy = {
+            OneShotLocationProxy(
+                locationManager: CLLocationManager(),
+                timeout: after(seconds: timeout)
+            ).promise
+        }
+        if Thread.isMainThread {
+            return makeProxy()
+        }
+        return DispatchQueue.main.async(.promise, execute: makeProxy).then { $0 }
     }
 }
 
@@ -266,11 +276,7 @@ final class OneShotLocationProxy: NSObject, CLLocationManagerDelegate {
         let failError: Error
 
         if let clErr = error as? CLError {
-            let realm = Current.realm()
-            realm.reentrantWrite {
-                let locErr = LocationError(err: clErr)
-                realm.add(locErr)
-            }
+            LocationError(err: clErr).save()
 
             Current.Log.error("Received CLError: \(clErr)")
             failError = OneShotError.clError(clErr)

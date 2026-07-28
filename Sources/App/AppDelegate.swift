@@ -1,6 +1,5 @@
 import Alamofire
 import CallbackURLKit
-import Communicator
 #if DEBUG
 import DebugSwift
 #endif
@@ -8,10 +7,7 @@ import FirebaseCore
 import FirebaseMessaging
 import Intents
 import KeychainAccess
-import MBProgressHUD
-import ObjectMapper
 import PromiseKit
-import RealmSwift
 import SafariServices
 import Shared
 import UIKit
@@ -114,6 +110,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         setupMenus()
 
         let launchingForLocation = launchOptions?[.location] != nil
+
+        // Warm the stand-by loading logo's WKWebView so it renders without cold-start delay.
+        // Skip on background location launches: the stand-by view is not shown then, and
+        // spinning up WebKit off-screen risks the app being terminated for doing too much work.
+        if !launchingForLocation {
+            AnimatedSVGWebViewCache.shared.preload(HomeAssistantStandByView.loadingLogoResourceName)
+        }
+
         let event = ClientEvent(
             text: "Application Starting" + (launchingForLocation ? " due to location change" : ""),
             type: .unknown
@@ -122,11 +126,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         zoneManager = ZoneManager()
 
-        UIApplication.shared.setMinimumBackgroundFetchInterval(UIApplication.backgroundFetchIntervalMinimum)
+        BackgroundRefreshManager.register()
+        BackgroundRefreshManager.scheduleAppRefresh()
+        RemindersSyncBackgroundRefresher.register()
+        RemindersSyncBackgroundRefresher.schedule()
 
         setupWatchCommunicator()
         setupUIApplicationShortcutItems()
         migrateIfNeeded()
+        RemindersSyncManager.shared.start()
 
         return true
     }
@@ -139,8 +147,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             return true
         }
 
+        // Tints the remaining UIKit-backed switches (e.g. the Eureka settings forms) with the
+        // brand color. SwiftUI toggles are no longer UISwitch-backed, so they get
+        // `BrandedSwitchToggleStyle` at the hosting seams instead.
+        UISwitch.appearance().onTintColor = .haPrimary
+
         lifecycleManager.didFinishLaunching()
         setupDebugSwift()
+        FlightGreetingManager.shared.start()
+        LocationBasedServerSwitcher.shared.start()
 
         #if targetEnvironment(macCatalyst)
         statusItemManager.configure()
@@ -173,11 +188,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
-    @objc func openAbout() {
-        precondition(Current.sceneManager.supportsMultipleScenes)
-        sceneManager.activateAnyScene(for: .about)
-    }
-
     @objc func openMenuUrl(_ command: AnyObject) {
         guard let command = command as? UICommand, let url = MenuManager.url(from: command) else {
             return
@@ -190,24 +200,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         }
     }
 
-    @objc func openPreferences() {
-        precondition(Current.sceneManager.supportsMultipleScenes)
-        sceneManager.activateAnyScene(for: .settings)
-    }
-
-    @objc func openHelp() {
-        openURLInBrowser(
-            URL(string: "https://companion.home-assistant.io")!,
-            nil
-        )
-    }
-
     func application(
         _ application: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
-        if #available(iOS 16.0, *), connectingSceneSession.role == UISceneSession.Role.carTemplateApplication {
+        if connectingSceneSession.role == UISceneSession.Role.carTemplateApplication {
             return SceneActivity.carPlay.configuration
         } else {
             let activity = options.userActivities
@@ -246,37 +244,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
         notificationManager.didReceiveRemoteNotification(userInfo: userInfo, fetchCompletionHandler: completionHandler)
-    }
-
-    func application(
-        _ application: UIApplication,
-        performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        Current.clientEventStore.addEvent(ClientEvent(text: "Background fetch activated", type: .backgroundOperation))
-        Current.backgroundTask(withName: BackgroundTask.backgroundFetch.rawValue) { remaining in
-            let updatePromise: Promise<Void>
-            if Current.settingsStore.isLocationEnabled(for: UIApplication.shared.applicationState),
-               Current.settingsStore.locationSources.backgroundFetch {
-                updatePromise = firstly {
-                    Current.location.oneShotLocation(.BackgroundFetch, remaining)
-                }.then { location in
-                    when(fulfilled: Current.apis.map {
-                        $0.SubmitLocation(updateType: .BackgroundFetch, location: location, zone: nil)
-                    })
-                }.asVoid()
-            } else {
-                updatePromise = when(fulfilled: Current.apis.map {
-                    $0.UpdateSensors(trigger: .BackgroundFetch, location: nil)
-                })
-            }
-
-            return updatePromise
-        }.done {
-            completionHandler(.newData)
-        }.catch { error in
-            Current.Log.error("Error when attempting to update data during background fetch: \(error)")
-            completionHandler(.failed)
-        }
     }
 
     func application(
@@ -355,7 +322,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     private func showNotificationCategoryAlertIfNeeded() {
-        guard Current.realm().objects(NotificationCategory.self).isEmpty == false else {
+        guard NotificationCategory.all().isEmpty == false else {
             return
         }
 
@@ -473,9 +440,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     private func setupModels() {
-        // Force Realm migration to happen now
-        _ = Realm.live()
+        // Import any legacy Realm data into GRDB before anything reads it
+        RealmToGRDBMigration.migrateIfNeeded()
         NotificationCategory.setupObserver()
+        // Start the server-state subscriptions that keep GRDB models in sync
+        // (zones via the states cache); without this, appZone is never populated
+        // and region monitoring has nothing to track.
+        Current.modelManager.cleanup().cauterize()
+        Current.modelManager.subscribe(isAppInForeground: {
+            UIApplication.shared.applicationState == .active
+        })
     }
 
     private func setupMenus() {
@@ -513,6 +487,20 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     private func migrateIfNeeded() {
         resetLocalPush()
+        resetShakeGesture()
+    }
+
+    /// Shake gesture no longer opens debug by default; users who had it set to debug are reset once to none.
+    private func resetShakeGesture() {
+        if !Current.settingsStore.migratedShakeGestureToNone {
+            var gestures = Current.settingsStore.gestures
+            if gestures[.shake] == .openDebug {
+                gestures[.shake] = HAGestureAction.none
+                Current.settingsStore.gestures = gestures
+                Current.Log.info("Reset shake gesture from open debug to none due to migration")
+            }
+            Current.settingsStore.migratedShakeGestureToNone = true
+        }
     }
 
     /// Local push becomes opt-in on 2025.6, users will have local push reset and need to re-enable it

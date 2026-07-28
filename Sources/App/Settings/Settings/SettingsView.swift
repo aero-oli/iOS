@@ -1,13 +1,15 @@
-import Communicator
 import Shared
 import SwiftUI
 
 struct SettingsView: View {
+    var embedInOwnNavigation: Bool = true
+
     @State private var selectedItem: SettingsItem? = .general
     @State private var showAbout = false
     @State private var whatsNewRelease: WhatsNewRelease?
     @State private var testFlightMessage: TestFlightMessage?
     @State private var isShowingTranslationKeys = prefs.bool(forKey: "showTranslationKeys")
+    @State private var searchText = ""
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var viewControllerProvider: ViewControllerProvider
     @StateObject private var serversObserver = ServersObserver()
@@ -44,28 +46,23 @@ struct SettingsView: View {
 
     private var macOSSidebarContent: some View {
         List(selection: $selectedItem) {
-            // Servers section
-            Section(header: Text(L10n.Settings.ConnectionSection.serversHeader)) {
-                ServersListView()
-            }
-
-            if isShowingTranslationKeys {
-                translationKeysWarningSection
-            }
-
-            // Other settings items
-            Section {
-                ForEach(SettingsItem.allVisibleCases, id: \.self) { item in
-                    NavigationLink(destination: item.destinationView) {
-                        Label {
-                            Text(item.title)
-                        } icon: {
-                            item.icon
-                        }
-                    }
+            if isSearching {
+                searchResultsContent
+            } else {
+                // Servers section
+                Section(header: Text(L10n.Settings.ConnectionSection.serversHeader)) {
+                    ServersListView()
                 }
+
+                if isShowingTranslationKeys {
+                    translationKeysWarningSection
+                }
+
+                // Settings items grouped by user objective
+                settingsSections(matching: nil)
             }
         }
+        .searchable(text: $searchText, prompt: Text(L10n.Settings.Search.prompt))
         .navigationTitle(L10n.Settings.NavigationBar.title)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -87,152 +84,93 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var iOSView: some View {
-        if #available(iOS 16.0, *) {
-            iOSViewModern
+        if embedInOwnNavigation {
+            NavigationStack {
+                iOSNavigationContent
+            }
         } else {
-            iOSViewLegacy
+            iOSNavigationContent
         }
     }
 
-    @available(iOS 16.0, *)
-    private var iOSViewModern: some View {
-        NavigationStack {
-            iOSListContent
-                .navigationDestination(for: SettingsItem.self) { item in
-                    item.destinationView
-                }
-        }
-    }
-
-    private var iOSViewLegacy: some View {
-        NavigationView {
-            iOSListContent
-                .navigationViewStyle(.stack)
-        }
+    private var iOSNavigationContent: some View {
+        iOSListContent
+            .navigationDestination(for: SettingsItem.self) { item in
+                item.destinationView
+            }
     }
 
     private var iOSListContent: some View {
         List {
-            // Servers section
-            Section(
-                header: Text(L10n.Settings.ConnectionSection.serversHeader),
-                footer: Text(L10n.Settings.ConnectionSection.serversReorderFooter)
-            ) {
-                ServersListView()
-            }
-            .environment(\.defaultMinListRowHeight, 60)
-
-            if isShowingTranslationKeys {
-                translationKeysWarningSection
-            }
-
-            // General section
-            Section {
-                ForEach(SettingsItem.generalItems, id: \.self) { item in
-                    NavigationLink(destination: item.destinationView) {
-                        settingsItemLabel(item)
-                    }
+            if isSearching {
+                searchResultsContent
+            } else {
+                // Servers section
+                Section(
+                    header: Text(L10n.Settings.ConnectionSection.serversHeader),
+                    footer: Text(L10n.Settings.ConnectionSection.serversReorderFooter)
+                ) {
+                    ServersListView()
                 }
-            }
+                .environment(\.defaultMinListRowHeight, 60)
 
-            // Integrations section
-            Section {
-                ForEach(SettingsItem.integrationItems, id: \.self) { item in
-                    NavigationLink(destination: item.destinationView) {
-                        settingsItemLabel(item)
-                    }
+                if isShowingTranslationKeys {
+                    translationKeysWarningSection
                 }
-            }
 
-            // Apple Watch section (only on iPhone with paired watch)
-            if shouldShowWatchSection {
-                Section(header: Text("Apple Watch")) {
-                    ForEach(SettingsItem.watchItems, id: \.self) { item in
-                        NavigationLink(destination: item.destinationView) {
-                            settingsItemLabel(item)
-                        }
-                    }
-                }
-            }
+                // Settings items grouped by user objective
+                settingsSections(matching: nil)
 
-            // CarPlay section (only on iPhone)
-            if UIDevice.current.userInterfaceIdiom == .phone {
-                Section {
-                    ForEach(SettingsItem.carPlayItems, id: \.self) { item in
-                        NavigationLink(destination: item.destinationView) {
-                            settingsItemLabel(item)
-                        }
-                    }
-                }
-            }
-
-            // Help section
-            Section {
-                ForEach(SettingsItem.helpItems, id: \.self) { item in
-                    if item == .help {
+                if let latestRelease = WhatsNewEngine().latestRelease() {
+                    // What's New
+                    Section {
                         Button {
-                            if let url = URL(string: "https://companion.home-assistant.io") {
-                                openURLInBrowser(url, viewControllerProvider.viewController)
-                            }
+                            whatsNewRelease = latestRelease
                         } label: {
-                            HStack {
-                                settingsItemLabel(item)
-                                Spacer()
-                                item.accessoryIcon
+                            settingsItemLabel(.whatsNew)
+                        }
+                    }
+                }
+
+                if let latestMessage = TestFlightCommunicationEngine().latestMessage() {
+                    // Beta Tester Updates
+                    Section {
+                        Button {
+                            testFlightMessage = latestMessage
+                        } label: {
+                            Label {
+                                Text(L10n.Settings.TestFlightCommunication.title)
+                            } icon: {
+                                Image(systemSymbol: .testtube2)
                             }
                         }
-                    } else {
-                        NavigationLink(destination: item.destinationView) {
-                            settingsItemLabel(item)
-                        }
                     }
                 }
-            }
 
-            if let latestRelease = WhatsNewEngine().latestRelease() {
-                // What's New
+                // About
                 Section {
                     Button {
-                        whatsNewRelease = latestRelease
-                    } label: {
-                        settingsItemLabel(.whatsNew)
-                    }
-                }
-            }
-
-            if let latestMessage = TestFlightCommunicationEngine().latestMessage() {
-                // Beta Tester Updates
-                Section {
-                    Button {
-                        testFlightMessage = latestMessage
+                        showAbout = true
                     } label: {
                         Label {
-                            Text(L10n.Settings.TestFlightCommunication.title)
+                            Text(L10n.Settings.NavigationBar.AboutButton.title)
                         } icon: {
-                            Image(systemSymbol: .testtube2)
+                            Image(systemSymbol: .infoCircle)
                         }
-                    }
-                }
-            }
-
-            // About
-            Section {
-                Button {
-                    showAbout = true
-                } label: {
-                    Label {
-                        Text(L10n.Settings.NavigationBar.AboutButton.title)
-                    } icon: {
-                        Image(systemSymbol: .infoCircle)
                     }
                 }
             }
         }
+        .searchable(
+            text: $searchText,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: Text(L10n.Settings.Search.prompt)
+        )
         .navigationTitle(L10n.Settings.NavigationBar.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                if !Current.sceneManager.supportsMultipleScenes || !Current.isCatalyst {
+                if embedInOwnNavigation, !Current.sceneManager.supportsMultipleScenes || !Current.isCatalyst {
                     CloseButton {
                         dismiss()
                     }
@@ -245,15 +183,8 @@ struct SettingsView: View {
             }
         }
         .sheet(isPresented: $showAbout) {
-            if #available(iOS 16.0, *) {
-                NavigationStack {
-                    aboutViewContent
-                }
-            } else {
-                NavigationView {
-                    aboutViewContent
-                }
-                .navigationViewStyle(.stack)
+            NavigationStack {
+                aboutViewContent
             }
         }
         .sheet(item: $whatsNewRelease) { release in
@@ -300,12 +231,149 @@ struct SettingsView: View {
         isShowingTranslationKeys = false
     }
 
-    private func settingsItemLabel(_ item: SettingsItem) -> some View {
+    // MARK: - Sections & Search
+
+    private var trimmedSearchQuery: String {
+        searchText.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var isSearching: Bool {
+        !trimmedSearchQuery.isEmpty
+    }
+
+    private var hasSearchResults: Bool {
+        if SettingsItem.servers.matches(searchQuery: trimmedSearchQuery) {
+            return true
+        }
+        if !serverSearchResults.isEmpty {
+            return true
+        }
+        return SettingsSection.allCases.contains { !$0.items(matching: trimmedSearchQuery).isEmpty }
+    }
+
+    private var serverConnectionContentMatches: [SettingsSearchEntry] {
+        guard isSearching else { return [] }
+        return ConnectionSettingsView.settingsSearchEntries.filter { $0.matches(searchQuery: trimmedSearchQuery) }
+    }
+
+    private var serverSearchResults: [Server] {
+        guard isSearching else { return [] }
+        if !serverConnectionContentMatches.isEmpty {
+            return serversObserver.servers
+        }
+        return serversObserver.servers.filter { $0.info.name.localizedStandardContains(trimmedSearchQuery) }
+    }
+
+    private var serverContentSubtitle: String? {
+        let matched = serverConnectionContentMatches
+        guard !matched.isEmpty else { return nil }
+        return matched.prefix(3).map(\.title).joined(separator: ", ")
+    }
+
+    @ViewBuilder
+    private var searchResultsContent: some View {
+        if hasSearchResults {
+            // Servers live in their own list normally (including the Catalyst sidebar, where the
+            // item is not "visible"), so surface them as plain rows when searching: the servers
+            // screen itself plus every server whose name or connection settings match the query.
+            let serverResults = serverSearchResults
+            if SettingsItem.servers.matches(searchQuery: trimmedSearchQuery) || !serverResults.isEmpty {
+                Section {
+                    if SettingsItem.servers.matches(searchQuery: trimmedSearchQuery) {
+                        settingsItemRow(.servers, searchQuery: trimmedSearchQuery)
+                    }
+                    ForEach(serverResults, id: \.identifier) { server in
+                        NavigationLink(destination: ConnectionSettingsView(server: server)) {
+                            serverSearchRow(server: server)
+                        }
+                    }
+                }
+            }
+            settingsSections(matching: trimmedSearchQuery)
+        } else {
+            noSearchResultsSection
+        }
+    }
+
+    private func serverSearchRow(server: Server) -> some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spaces.half) {
+            HomeAssistantAccountRowView(server: server)
+            if let serverContentSubtitle {
+                Text(serverContentSubtitle)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsSections(matching searchQuery: String?) -> some View {
+        ForEach(SettingsSection.allCases, id: \.self) { section in
+            let items = searchQuery.map { section.items(matching: $0) } ?? section.items
+            if !items.isEmpty {
+                Section(header: Text(section.header)) {
+                    ForEach(items, id: \.self) { item in
+                        settingsItemRow(item, searchQuery: searchQuery)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func settingsItemRow(_ item: SettingsItem, searchQuery: String? = nil) -> some View {
+        let subtitle = searchQuery.flatMap { item.contentMatchesSubtitle(searchQuery: $0) }
+        if item == .help {
+            Button {
+                if let url = URL(string: "https://companion.home-assistant.io") {
+                    openURLInBrowser(url, viewControllerProvider.viewController)
+                }
+            } label: {
+                HStack {
+                    settingsItemLabel(item, subtitle: subtitle)
+                    Spacer()
+                    item.accessoryIcon
+                }
+            }
+        } else {
+            NavigationLink(destination: item.destinationView) {
+                settingsItemLabel(item, subtitle: subtitle)
+            }
+        }
+    }
+
+    private var noSearchResultsSection: some View {
+        Section {
+            VStack(spacing: DesignSystem.Spaces.two) {
+                Image(systemSymbol: .magnifyingglass)
+                    .font(.title2)
+                    .foregroundColor(.secondary)
+                Text(L10n.Settings.Search.NoResults.title(trimmedSearchQuery))
+                    .font(.headline)
+                Text(L10n.Settings.Search.NoResults.subtitle)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
+            .padding(.vertical, DesignSystem.Spaces.two)
+        }
+        .listRowBackground(Color.clear)
+    }
+
+    private func settingsItemLabel(_ item: SettingsItem, subtitle: String? = nil) -> some View {
         Label {
-            HStack(spacing: DesignSystem.Spaces.one) {
-                Text(item.title)
-                if item == .liveActivities {
-                    LabsLabel()
+            VStack(alignment: .leading) {
+                HStack(spacing: DesignSystem.Spaces.one) {
+                    Text(item.title)
+                    if item == .complications || item == .remindersSync {
+                        LabsLabel()
+                    }
+                }
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                 }
             }
         } icon: {
@@ -324,14 +392,9 @@ struct SettingsView: View {
                 }
             }
     }
+}
 
-    private var shouldShowWatchSection: Bool {
-        guard UIDevice.current.userInterfaceIdiom == .phone else { return false }
-        if Current.isDebug {
-            return true
-        } else if case .paired = Communicator.shared.currentWatchState {
-            return true
-        }
-        return false
-    }
+#Preview {
+    SettingsView()
+        .injectingViewControllerProvider()
 }

@@ -42,13 +42,11 @@ struct GeneralSettingsView: View {
             }
 
             Section(L10n.SettingsDetails.General.Page.title) {
-                rememberLastPage
                 pageZoomPicker
                 pinchZoom
                 fullScreen
                 refreshAfterInactive
             }
-            edgeToEdge
         }
         .id(redrawHelper)
     }
@@ -116,21 +114,6 @@ struct GeneralSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var rememberLastPage: some View {
-        // Mac has a system-level setting for state restoration
-        if !Current.isCatalyst {
-            Toggle(isOn: .init(get: {
-                Current.settingsStore.restoreLastURL
-            }, set: { newValue in
-                Current.settingsStore.restoreLastURL = newValue
-                redrawView()
-            })) {
-                Text(L10n.SettingsDetails.General.Restoration.title)
-            }
-        }
-    }
-
     private var pageZoomPicker: some View {
         Picker(
             L10n.SettingsDetails.General.PageZoom.title,
@@ -173,28 +156,6 @@ struct GeneralSettingsView: View {
             })) {
                 Text(L10n.SettingsDetails.General.FullScreen.title)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var edgeToEdge: some View {
-        Section {
-            if !Current.isCatalyst {
-                Toggle(isOn: .init(get: {
-                    Current.settingsStore.edgeToEdge
-                }, set: { newValue in
-                    Current.settingsStore.edgeToEdge = newValue
-                    redrawView()
-                })) {
-                    Text("Edge to edge display")
-                }
-            }
-        } header: {
-            Text("Experimental")
-        } footer: {
-            Text(
-                "Display Home Assistant UI from edge to edge on devices that support it. This is an experimental feature which can be removed at any time and also may cause layout issues."
-            )
         }
     }
 
@@ -317,4 +278,18 @@ struct GeneralSettingsView: View {
         GeneralSettingsView()
     }
     .navigationViewStyle(.stack)
+}
+
+extension GeneralSettingsView: SettingsScreenSearchable {
+    static var settingsSearchEntries: [SettingsSearchEntry] {
+        [
+            SettingsSearchEntry(L10n.SettingsDetails.General.AppIcon.title),
+            SettingsSearchEntry(L10n.SettingsDetails.General.OpenInBrowser.title),
+            SettingsSearchEntry(L10n.SettingsDetails.General.OpenInPrivateTab.title),
+            SettingsSearchEntry(L10n.SettingsDetails.Notifications.PromptToOpenUrls.title),
+            SettingsSearchEntry(L10n.SettingsDetails.General.PageZoom.title),
+            SettingsSearchEntry(L10n.SettingsDetails.General.PinchToZoom.title),
+            SettingsSearchEntry(L10n.SettingsDetails.General.FullScreen.title),
+        ]
+    }
 }

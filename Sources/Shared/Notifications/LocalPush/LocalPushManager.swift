@@ -1,4 +1,5 @@
 import HAKit
+import HAKit_PromiseKit
 import PromiseKit
 import UserNotifications
 
@@ -12,6 +13,7 @@ public protocol LocalPushManagerDelegate: AnyObject {
 public class LocalPushManager {
     public let server: Server
     public weak var delegate: LocalPushManagerDelegate?
+    private let notificationCommunicationDecorator: NotificationCommunicationDecorator
 
     public static let stateDidChange: Notification.Name = .init(rawValue: "LocalPushManagerStateDidChange")
 
@@ -82,8 +84,13 @@ public class LocalPushManager {
 
     private var tokens = [HACancellable]()
 
-    public init(server: Server) {
+    public init(
+        server: Server,
+        notificationCommunicationDecorator: NotificationCommunicationDecorator =
+            NotificationCommunicationDecoratorImpl()
+    ) {
         self.server = server
+        self.notificationCommunicationDecorator = notificationCommunicationDecorator
 
         updateSubscription()
         tokens.append(server.observe { [weak self] _ in
@@ -183,19 +190,11 @@ public class LocalPushManager {
         delegate?.localPushManager(self, didReceiveRemoteNotification: userInfo)
 
         if isLiveActivity {
-            // The activity itself is updated via the delegate above. Present an alerting banner
-            // (sound + haptics) when the update is not silent, so a start/update is noticed;
-            // a silent update refreshes the activity quietly. `baseContent` already carries the
-            // sound/empty-alert the parser derived from `silent`. Either way the confirm is owned
-            // by the live activity presentation path, so it stays deferred here.
-            if Self.isSilentLiveActivity(userInfo) {
-                Current.Log.info("local push: silent Live Activity command, suppressing banner, deferring confirm")
-            } else {
-                Current.Log.info("local push: Live Activity command, presenting alert, deferring confirm")
-                add(UNNotificationRequest(identifier: event.identifier, content: baseContent, trigger: nil))
-                    .done { Current.Log.info("local push: presented Live Activity alert") }
-                    .catch { Current.Log.error("local push: failed to present Live Activity alert: \($0)") }
-            }
+            // A live update only starts/updates the Live Activity via the delegate above, silent
+            // or not; it never surfaces a standalone banner (the widget is the only visual
+            // feedback, matching NotificationManager.willPresent). The confirm is owned by the
+            // live activity presentation path, so it stays deferred here.
+            Current.Log.info("local push: Live Activity command, updating activity only, deferring confirm")
             return
         }
 
@@ -220,19 +219,30 @@ public class LocalPushManager {
             return
         }
 
-        firstly {
-            Current.notificationAttachmentManager.content(from: baseContent, api: api)
-        }.recover { error in
-            Current.Log.error("failed to get content, giving default: \(error)")
-            return .value(baseContent)
-        }.then { [add] content -> Promise<Void> in
-            add(UNNotificationRequest(identifier: event.identifier, content: content, trigger: nil))
-        }.then { () -> Promise<Void> in
-            confirmReceipt()
-        }.done {
-            Current.Log.info("added local notification")
-        }.catch { error in
-            Current.Log.error("failed to add local notification: \(error)")
+        Task { [add, notificationCommunicationDecorator] in
+            var content = await withCheckedContinuation { continuation in
+                Current.notificationAttachmentManager.content(from: baseContent, api: api).done {
+                    continuation.resume(returning: $0)
+                }
+            }
+            if let sender = NotificationSenderParser.parse(from: content) {
+                content = await notificationCommunicationDecorator.decorate(
+                    content: content,
+                    sender: sender,
+                    api: api
+                )
+            }
+            add(UNNotificationRequest(
+                identifier: event.identifier,
+                content: content,
+                trigger: nil
+            )).then {
+                confirmReceipt()
+            }.done {
+                Current.Log.info("added local notification")
+            }.catch { error in
+                Current.Log.error("failed to add local notification: \(error)")
+            }
         }
     }
 
@@ -246,12 +256,5 @@ public class LocalPushManager {
     private static func isCommand(_ userInfo: [AnyHashable: Any]) -> Bool {
         guard let hadict = userInfo["homeassistant"] as? [String: Any] else { return false }
         return (hadict["command"] as? String) != nil
-    }
-
-    /// Whether a Live Activity update opted out of alerting. Only an explicit `silent: true`
-    /// suppresses the sound/haptics; a missing or `false` value alerts like a normal notification.
-    private static func isSilentLiveActivity(_ userInfo: [AnyHashable: Any]) -> Bool {
-        guard let hadict = userInfo["homeassistant"] as? [String: Any] else { return false }
-        return (hadict["silent"] as? Bool) == true
     }
 }

@@ -27,10 +27,10 @@ struct GRDBInitializationTests {
         )
     }
 
-    @Test("Tables returns exactly 15 tables")
-    func tablesReturns15Tables() throws {
+    @Test("Tables returns exactly 26 tables")
+    func tablesReturns26Tables() throws {
         let tables = DatabaseQueue.tables()
-        #expect(tables.count == 15, "DatabaseQueue.tables() should return exactly 15 tables")
+        #expect(tables.count == 26, "DatabaseQueue.tables() should return exactly 26 tables")
     }
 
     @Test("Tables contains all expected table names")
@@ -43,6 +43,7 @@ struct GRDBInitializationTests {
             GRDBDatabaseTable.HAAppEntity.rawValue,
             GRDBDatabaseTable.watchConfig.rawValue,
             GRDBDatabaseTable.carPlayConfig.rawValue,
+            GRDBDatabaseTable.macToolbarConfig.rawValue,
             GRDBDatabaseTable.appIconShortcutConfig.rawValue,
             GRDBDatabaseTable.assistPipelines.rawValue,
             GRDBDatabaseTable.serverInfoMirror.rawValue,
@@ -55,6 +56,15 @@ struct GRDBInitializationTests {
             GRDBDatabaseTable.assistConfiguration.rawValue,
             GRDBDatabaseTable.allowedTags.rawValue,
             GRDBDatabaseTable.kioskSettings.rawValue,
+            GRDBDatabaseTable.watchComplication.rawValue,
+            GRDBDatabaseTable.watchComplicationConfig.rawValue,
+            GRDBDatabaseTable.appZone.rawValue,
+            GRDBDatabaseTable.notificationCategory.rawValue,
+            GRDBDatabaseTable.locationHistory.rawValue,
+            GRDBDatabaseTable.locationError.rawValue,
+            GRDBDatabaseTable.remindersSyncConfig.rawValue,
+            GRDBDatabaseTable.remindersSyncItemLink.rawValue,
+            GRDBDatabaseTable.remindersSyncHistoryEntry.rawValue,
         ]
 
         for expectedName in expectedTableNames {

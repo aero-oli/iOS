@@ -196,6 +196,17 @@ struct TableSchemaTests {
         )
     }
 
+    @Test("MacToolbarConfigTable schema validation")
+    func macToolbarConfigTableSchema() throws {
+        let table = MacToolbarConfigTable()
+        let expectedColumns = DatabaseTables.MacToolbarConfig.allCases.map(\.rawValue)
+        try verifyTableSchema(
+            table: table,
+            expectedTableName: GRDBDatabaseTable.macToolbarConfig.rawValue,
+            expectedColumns: expectedColumns
+        )
+    }
+
     @Test("AllowedTagTable schema validation")
     func allowedTagTableSchema() throws {
         let table = AllowedTagTable()
@@ -207,13 +218,85 @@ struct TableSchemaTests {
         )
     }
 
-    @Test("All 15 tables create successfully together")
+    @Test("AppZoneTable schema validation")
+    func appZoneTableSchema() throws {
+        try verifyTableSchema(
+            table: AppZoneTable(),
+            expectedTableName: GRDBDatabaseTable.appZone.rawValue,
+            expectedColumns: DatabaseTables.AppZone.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("NotificationCategoryTable schema validation")
+    func notificationCategoryTableSchema() throws {
+        try verifyTableSchema(
+            table: NotificationCategoryTable(),
+            expectedTableName: GRDBDatabaseTable.notificationCategory.rawValue,
+            expectedColumns: DatabaseTables.NotificationCategory.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("WatchComplicationTable schema validation")
+    func watchComplicationTableSchema() throws {
+        try verifyTableSchema(
+            table: WatchComplicationTable(),
+            expectedTableName: GRDBDatabaseTable.watchComplication.rawValue,
+            expectedColumns: DatabaseTables.WatchComplication.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("LocationHistoryTable schema validation")
+    func locationHistoryTableSchema() throws {
+        try verifyTableSchema(
+            table: LocationHistoryTable(),
+            expectedTableName: GRDBDatabaseTable.locationHistory.rawValue,
+            expectedColumns: DatabaseTables.LocationHistory.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("LocationErrorTable schema validation")
+    func locationErrorTableSchema() throws {
+        try verifyTableSchema(
+            table: LocationErrorTable(),
+            expectedTableName: GRDBDatabaseTable.locationError.rawValue,
+            expectedColumns: DatabaseTables.LocationError.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("RemindersSyncConfigTable schema validation")
+    func remindersSyncConfigTableSchema() throws {
+        try verifyTableSchema(
+            table: RemindersSyncConfigTable(),
+            expectedTableName: GRDBDatabaseTable.remindersSyncConfig.rawValue,
+            expectedColumns: DatabaseTables.RemindersSyncConfig.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("RemindersSyncItemLinkTable schema validation")
+    func remindersSyncItemLinkTableSchema() throws {
+        try verifyTableSchema(
+            table: RemindersSyncItemLinkTable(),
+            expectedTableName: GRDBDatabaseTable.remindersSyncItemLink.rawValue,
+            expectedColumns: DatabaseTables.RemindersSyncItemLink.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("RemindersSyncHistoryEntryTable schema validation")
+    func remindersSyncHistoryEntryTableSchema() throws {
+        try verifyTableSchema(
+            table: RemindersSyncHistoryEntryTable(),
+            expectedTableName: GRDBDatabaseTable.remindersSyncHistoryEntry.rawValue,
+            expectedColumns: DatabaseTables.RemindersSyncHistoryEntry.allCases.map(\.rawValue)
+        )
+    }
+
+    @Test("All 26 tables create successfully together")
     func allTablesCreateTogether() throws {
         let database = try DatabaseQueue(path: ":memory:")
         let tables = DatabaseQueue.tables()
 
-        // Verify we have exactly 15 tables
-        #expect(tables.count == 15, "Should have exactly 15 tables, but found \(tables.count)")
+        // Verify we have exactly 26 tables
+        #expect(tables.count == 26, "Should have exactly 26 tables, but found \(tables.count)")
 
         // Create all tables
         for table in tables {

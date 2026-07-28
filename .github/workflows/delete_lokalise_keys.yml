@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-      - uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74  # v1.314.0
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600  # v1.319.0
         with:
           ruby-version: '3.1'
           bundler-cache: true
@@ -61,7 +61,7 @@ jobs:
   open_cleanup_pr:
     needs: delete_keys
     if: ${{ inputs.dry_run == false }}
-    runs-on: macos-15
+    runs-on: macos-26
     permissions:
       contents: write
       pull-requests: write
@@ -71,8 +71,6 @@ jobs:
           ssh-key: ${{ secrets.HOMEASSISTANT_SSH_DEPLOY_KEY }}
       - name: Install Gems
         run: bundle install --jobs 4 --retry 3
-      - name: Install Pods
-        run: ONLY_SUPPORT_MODULES=1 bundle exec pod install --repo-update
       - name: Remove keys from Localizable.strings and regenerate
         run: bundle exec fastlane delete_local_strings
         env:

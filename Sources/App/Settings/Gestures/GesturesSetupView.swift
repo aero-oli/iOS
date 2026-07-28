@@ -91,7 +91,12 @@ struct GesturesSetupView: View {
         var sections: [ListPickerContent.Section] = []
         for category in HAGestureActionCategory.allCases {
             let items = HAGestureAction.allCases.filter({ $0.category == category }).map { action in
-                ListPickerContent.Item(id: action.rawValue, title: action.localizedString)
+                ListPickerContent.Item(
+                    id: action.rawValue,
+                    title: action.localizedString,
+                    subtitle: action.moreInfo,
+                    showsLabsLabel: action.isLabsFeature
+                )
             }
             sections.append(.init(id: category.rawValue, title: category.localizedString, items: items))
         }
@@ -121,5 +126,17 @@ struct GesturesSetupView: View {
 #Preview {
     NavigationView {
         GesturesSetupView()
+    }
+}
+
+extension GesturesSetupView: SettingsScreenSearchable {
+    static var settingsSearchEntries: [SettingsSearchEntry] {
+        [
+            SettingsSearchEntry(L10n.Gestures.Swipe.Up.header),
+            SettingsSearchEntry(L10n.Gestures.Swipe.Down.header),
+            SettingsSearchEntry(L10n.Gestures.Swipe.Left.header),
+            SettingsSearchEntry(L10n.Gestures.Swipe.Right.header),
+            SettingsSearchEntry(L10n.Gestures.Reset.title),
+        ]
     }
 }

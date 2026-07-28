@@ -2,7 +2,6 @@ import CoreLocation
 import Foundation
 import HAKit
 import PromiseKit
-import Version
 
 public struct SensorObserverUpdate {
     public let sensors: Guarantee<[WebhookSensor]>
@@ -41,9 +40,9 @@ public struct SensorResponse {
 }
 
 public class SensorContainer {
-    private var providers = [SensorProvider.Type]()
-    private var observers = NSHashTable<AnyObject>(options: .weakMemory)
-    private var providerDependencies: SensorProviderDependencies
+    private let providers = HAProtected<[SensorProvider.Type]>(value: [])
+    private let observers = HAProtected<NSHashTable<AnyObject>>(value: .init(options: .weakMemory))
+    private let providerDependencies: SensorProviderDependencies
 
     init() {
         self.providerDependencies = SensorProviderDependencies()
@@ -53,19 +52,19 @@ public class SensorContainer {
     }
 
     public func register(provider: SensorProvider.Type) {
-        providers.append(provider)
+        providers.mutate { $0.append(provider) }
     }
 
     public func register(observer: SensorObserver) {
-        observers.add(observer)
+        observers.mutate { $0.add(observer) }
 
-        if let lastUpdate {
+        if let lastUpdate = lastUpdate.read({ $0 }) {
             observer.sensorContainer(self, didUpdate: lastUpdate)
         }
     }
 
     public func unregister(observer: SensorObserver) {
-        observers.remove(observer)
+        observers.mutate { $0.remove(observer) }
     }
 
     private var disabledSensorIDs: Set<String> {
@@ -109,13 +108,31 @@ public class SensorContainer {
         }
     }
 
-    private var lastUpdate: SensorObserverUpdate? {
-        didSet {
-            guard let lastUpdate else { return }
-            observers
-                .allObjects
-                .compactMap { $0 as? SensorObserver }
-                .forEach { $0.sensorContainer(self, didUpdate: lastUpdate) }
+    /// Disables a sensor the first time it is ever seen, so opt-in sensors (e.g. camera-based
+    /// ones, which must not prompt for permission unless the user asks) don't follow the
+    /// enabled-by-default behavior. Subsequent calls are no-ops, preserving the user's choice.
+    public func disableInitially(sensorId: WebhookSensorId) {
+        let key = Self.initialDisableKey(for: sensorId)
+        let prefs = Current.settingsStore.prefs
+        guard prefs.object(forKey: key) == nil else { return }
+        prefs.set(true, forKey: key)
+        setEnabled(false, forUniqueID: sensorId.rawValue)
+    }
+
+    static func initialDisableKey(for sensorId: WebhookSensorId) -> String {
+        "sensor_initially_disabled_\(sensorId.rawValue)"
+    }
+
+    private let lastUpdate = HAProtected<SensorObserverUpdate?>(value: nil)
+
+    private func currentObservers() -> [SensorObserver] {
+        observers.read { $0.allObjects.compactMap { $0 as? SensorObserver } }
+    }
+
+    private func setLastUpdate(_ update: SensorObserverUpdate) {
+        lastUpdate.mutate { $0 = update }
+        for observer in currentObservers() {
+            observer.sensorContainer(self, didUpdate: update)
         }
     }
 
@@ -159,7 +176,7 @@ public class SensorContainer {
         )
 
         let generatedSensors = firstly {
-            let promises = providers
+            let promises = providers.read { $0 }
                 .filter { providerType in
                     if let limitedTo {
                         return limitedTo.contains(where: { ObjectIdentifier($0) == ObjectIdentifier(providerType) })
@@ -182,7 +199,7 @@ public class SensorContainer {
             }.flatMap { $0 }
         }
 
-        lastUpdate = .init(sensors: generatedSensors.map { [lastSentSensors] new in
+        setLastUpdate(.init(sensors: generatedSensors.map { [lastSentSensors] new in
             // doesn't store the sent values, that happens when the network request ends
             // this is just what's presented to the user, so we always have the latest version
             let ignoringExisting: Bool
@@ -207,7 +224,7 @@ public class SensorContainer {
                 case (false, true): return false
                 }
             })
-        })
+        }))
 
         return generatedSensors.mapValues { [weak self] sensor -> WebhookSensor in
             guard let self else { return sensor }
@@ -221,10 +238,10 @@ public class SensorContainer {
     }
 
     private func notifySignal(reason: SensorContainerUpdateReason) {
-        observers
-            .allObjects
-            .compactMap { $0 as? SensorObserver }
-            .forEach { $0.sensorContainer(self, didSignalForUpdateBecause: reason, lastUpdate: lastUpdate) }
+        let update = lastUpdate.read { $0 }
+        for observer in currentObservers() {
+            observer.sensorContainer(self, didSignalForUpdateBecause: reason, lastUpdate: update)
+        }
     }
 
     private func updateSignaled(from type: SensorProvider.Type) {

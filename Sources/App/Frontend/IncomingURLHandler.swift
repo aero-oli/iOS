@@ -72,8 +72,7 @@ class IncomingURLHandler {
                     handler: { self.sendLocationURLHandler() }
                 )
             case .camera:
-                guard #available(iOS 16.0, *),
-                      var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                     return false
                 }
                 components.scheme = nil
@@ -206,16 +205,8 @@ class IncomingURLHandler {
                                 }
                             }
                         let controller = UIHostingController(rootView: AnyView(
-                            Group {
-                                if #available(iOS 16.0, *) {
-                                    NavigationStack {
-                                        mainView
-                                    }
-                                } else {
-                                    NavigationView {
-                                        mainView
-                                    }
-                                }
+                            NavigationStack {
+                                mainView
                             }
                         ))
                         webViewController.presentOverlayController(controller: controller, animated: true)
@@ -249,27 +240,6 @@ class IncomingURLHandler {
     func handle(userActivity: NSUserActivity) -> Bool {
         Current.Log.info(userActivity)
 
-        if let assistInAppIntent = userActivity.interaction?.intent as? AssistInAppIntent {
-            guard let server = Current.servers.server(for: assistInAppIntent) ?? Current.servers.all.first else { return false }
-            let pipeline = assistInAppIntent.pipeline
-            let autoStartRecording = Bool(exactly: assistInAppIntent.withVoice ?? 0) ?? false
-
-            Current.sceneManager.webViewControllerPromise.pipe { result in
-                switch result {
-                case let .fulfilled(webView):
-                    webView.webViewExternalMessageHandler.showAssist(
-                        server: server,
-                        pipeline: pipeline?.identifier ?? "",
-                        autoStartRecording: autoStartRecording
-                    )
-                case let .rejected(error):
-                    Current.Log.error("Failed to obtain webview to open Assist In App: \(error.localizedDescription)")
-                }
-            }
-
-            return true
-        }
-
         switch Current.tags.handle(userActivity: userActivity) {
         case let .handled(type):
             showTagReadConfirmation(type: type)
@@ -284,33 +254,6 @@ class IncomingURLHandler {
             // not a tag
             if let url = userActivity.webpageURL, url.host?.lowercased() == "my.home-assistant.io" {
                 return showMy(for: url)
-            } else if let interaction = userActivity.interaction {
-                if
-                    let intent = interaction.intent as? OpenPageIntent,
-                    let panel = intent.page, let path = panel.identifier {
-                    Current.Log.info("launching from shortcuts with panel \(panel)")
-
-                    let urlString = "/" + path
-                    if let server = Current.servers.server(for: panel) {
-                        coordinator.open(
-                            from: .deeplink,
-                            server: server,
-                            urlString: urlString,
-                            skipConfirm: true,
-                            isComingFromAppIntent: false
-                        )
-                    } else {
-                        coordinator.openSelectingServer(
-                            from: .deeplink,
-                            urlString: urlString,
-                            skipConfirm: true,
-                            isComingFromAppIntent: false
-                        )
-                    }
-                    return true
-                }
-
-                return false
             } else {
                 return false
             }
@@ -331,14 +274,12 @@ class IncomingURLHandler {
             case HAApplicationShortcutItem.openSettings.rawValue:
                 if Current.isCatalyst, Current.settingsStore.macNativeFeaturesOnly {
                     // Close window to avoid empty window left behind
-                    for window in UIApplication.shared.windows {
-                        if let scene = window.windowScene {
-                            UIApplication.shared.requestSceneSessionDestruction(
-                                scene.session,
-                                options: nil,
-                                errorHandler: nil
-                            )
-                        }
+                    for scene in UIApplication.shared.connectedScenes where scene is UIWindowScene {
+                        UIApplication.shared.requestSceneSessionDestruction(
+                            scene.session,
+                            options: nil,
+                            errorHandler: nil
+                        )
                     }
                 }
                 Current.sceneManager.activateAnyScene(for: .settings)
@@ -545,7 +486,7 @@ class IncomingURLHandler {
     }
 
     private func showTagApproval(tag: String, type: TagManagerHandleResult.HandledType) {
-        Current.sceneManager.webViewControllerPromise.done { webViewController in
+        Current.sceneManager.webViewControllerPromise.done { [weak self] webViewController in
             let view = TagApprovalBottomSheet(
                 tag: tag,
                 onAllowOnce: { [weak self] in

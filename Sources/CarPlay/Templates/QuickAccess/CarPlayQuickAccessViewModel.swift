@@ -1,9 +1,7 @@
 import Foundation
 import HAKit
-import RealmSwift
 import Shared
 
-@available(iOS 16.0, *)
 final class CarPlayQuickAccessViewModel {
     weak var templateProvider: CarPlayQuickAccessTemplate?
 
@@ -13,14 +11,15 @@ final class CarPlayQuickAccessViewModel {
                 let items = filterItems(config.quickAccessItems)
                 templateProvider?.updateList(
                     for: items,
-                    layout: config.resolvedQuickAccessLayout
+                    layout: config.resolvedQuickAccessLayout,
+                    showAddEditButtons: config.resolvedShowAddEditButtons
                 )
             } else {
-                templateProvider?.updateList(for: [], layout: .grid)
+                templateProvider?.updateList(for: [], layout: .grid, showAddEditButtons: true)
             }
         } catch {
             Current.Log.error("Failed to access CarPlay configuration, error: \(error.localizedDescription)")
-            templateProvider?.updateList(for: [], layout: .grid)
+            templateProvider?.updateList(for: [], layout: .grid, showAddEditButtons: true)
         }
     }
 

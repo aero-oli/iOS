@@ -15,7 +15,8 @@ public protocol LiveActivityRegistryProtocol: AnyObject {
         tag: String,
         title: String,
         serverWebhookId: String?,
-        state: HALiveActivityAttributes.ContentState
+        state: HALiveActivityAttributes.ContentState,
+        alert: Bool
     ) async throws -> Bool
     @available(iOS 17.2, *)
     func end(tag: String, dismissalPolicy: ActivityUIDismissalPolicy) async
@@ -104,9 +105,10 @@ public actor LiveActivityRegistry: LiveActivityRegistryProtocol {
         entries[id] = entry
         if let latestState = pending {
             // A second push arrived while Activity.request() was in-flight — apply the newer state now.
+            let state = Self.carryForwardChronometerAnchor(previous: entry.activity.content.state, new: latestState)
             let content = ActivityContent(
-                state: latestState,
-                staleDate: computeStaleDate(for: latestState)
+                state: state,
+                staleDate: computeStaleDate(for: state)
             )
             await entry.activity.update(content)
         }
@@ -132,34 +134,38 @@ public actor LiveActivityRegistry: LiveActivityRegistryProtocol {
         tag: String,
         title: String,
         serverWebhookId: String?,
-        state: HALiveActivityAttributes.ContentState
+        state: HALiveActivityAttributes.ContentState,
+        alert: Bool
     ) async throws -> Bool {
         // UPDATE path — activity already running with this tag
         if let existing = entries[tag] {
+            let state = Self.carryForwardChronometerAnchor(previous: existing.activity.content.state, new: state)
             let content = ActivityContent(
                 state: state,
                 staleDate: computeStaleDate(for: state)
             )
-            await existing.activity.update(content)
+            await existing.activity.update(
+                content,
+                alertConfiguration: Self.alertConfiguration(alert, title: title, message: state.message)
+            )
             return true
         }
 
         // Also check system list in case we lost track after crash/relaunch
         if let live = Activity<HALiveActivityAttributes>.activities
             .first(where: { $0.attributes.tag == tag }) {
+            let state = Self.carryForwardChronometerAnchor(previous: live.content.state, new: state)
             let content = ActivityContent(
                 state: state,
                 staleDate: computeStaleDate(for: state)
             )
-            await live.update(content)
+            await live.update(
+                content,
+                alertConfiguration: Self.alertConfiguration(alert, title: title, message: state.message)
+            )
             let observationTask = makeObservationTask(for: live)
             entries[tag] = Entry(activity: live, observationTask: observationTask)
             return true
-        }
-
-        guard Current.isTestFlight else {
-            Current.Log.info("LiveActivityRegistry: start gated to TestFlight, skipping tag \(tag)")
-            return false
         }
 
         // START path — guard against duplicates with reservation
@@ -208,6 +214,17 @@ public actor LiveActivityRegistry: LiveActivityRegistryProtocol {
         await confirmReservation(id: tag, entry: Entry(activity: activity, observationTask: observationTask))
         Current.Log.verbose("LiveActivityRegistry: started activity for tag \(tag), id=\(activity.id)")
         return true
+    }
+
+    /// A non-silent update fires an ActivityKit alert (sound + haptic, and pings a paired Apple
+    /// Watch) so a Live Activity refresh is noticed without dispatching a standalone banner.
+    private static func alertConfiguration(
+        _ alert: Bool,
+        title: String,
+        message: String
+    ) -> AlertConfiguration? {
+        guard alert else { return nil }
+        return AlertConfiguration(title: "\(title)", body: "\(message)", sound: .default)
     }
 
     /// End and dismiss the Live Activity for `tag`.
@@ -394,6 +411,34 @@ public actor LiveActivityRegistry: LiveActivityRegistryProtocol {
             return max(end.addingTimeInterval(2), Date().addingTimeInterval(2))
         }
         return Date().addingTimeInterval(kLiveActivityStaleInterval)
+    }
+
+    // MARK: - Bounded Count-Up Anchor
+
+    /// Preserve a bounded count-up's start anchor across updates.
+    ///
+    /// A bounded count-up is requested with a negative relative `when`, which the handler resolves
+    /// to `chronometerStart = now` and `countdownEnd = now + |when|`. An update that re-sends the
+    /// same `when` re-stamps both from its own receipt time, which would visually reset the elapsed
+    /// timer to 0:00. When the previous state is a bounded count-up of the same duration (within
+    /// 1 s, absorbing parse-time jitter), keep its anchor and end so the timer keeps running;
+    /// a different duration means a new timer and re-anchors as sent.
+    static func carryForwardChronometerAnchor(
+        previous: HALiveActivityAttributes.ContentState,
+        new: HALiveActivityAttributes.ContentState
+    ) -> HALiveActivityAttributes.ContentState {
+        guard new.chronometer == true,
+              let newStart = new.chronometerStart,
+              let newEnd = new.countdownEnd,
+              let previousStart = previous.chronometerStart,
+              let previousEnd = previous.countdownEnd else { return new }
+        let newDuration = newEnd.timeIntervalSince(newStart)
+        let previousDuration = previousEnd.timeIntervalSince(previousStart)
+        guard abs(newDuration - previousDuration) < 1 else { return new }
+        var carried = new
+        carried.chronometerStart = previousStart
+        carried.countdownEnd = previousEnd
+        return carried
     }
 
     // MARK: - Private — Duplicate Resolution

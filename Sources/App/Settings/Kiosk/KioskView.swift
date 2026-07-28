@@ -10,14 +10,25 @@ struct ConditionalContainerView: View {
     @State private var showKioskSettings = false
 
     var body: some View {
-        content
-            .sheet(isPresented: $appSettings.isPresented) {
-                SettingsView()
-                    .injectingViewControllerProvider()
-                    .onDisappear {
-                        Current.sceneManager.webViewControllerPromise.done { $0.refreshIfDisconnected() }
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            NavigationStack {
+                content
+                    .toolbar(.hidden, for: .navigationBar)
+                    .navigationDestination(isPresented: $appSettings.isPushPresented) {
+                        SettingsView(embedInOwnNavigation: false)
+                            .injectingViewControllerProvider()
                     }
             }
+            .sheet(isPresented: $appSettings.isSheetPresented) { settingsSheet }
+        } else {
+            content
+                .sheet(isPresented: $appSettings.isSheetPresented) { settingsSheet }
+        }
+    }
+
+    private var settingsSheet: some View {
+        SettingsView()
+            .injectingViewControllerProvider()
     }
 
     private var content: some View {
@@ -32,6 +43,12 @@ struct ConditionalContainerView: View {
         .onChange(of: kiosk.shouldKeepScreenOn) { _ in applyKeepScreenOn() }
         .onChange(of: scenePhase) { phase in
             if phase == .active { applyKeepScreenOn() }
+        }
+        .onChange(of: appSettings.isSheetPresented) { isPresented in
+            refreshWebViewIfSettingsClosed(isPresented)
+        }
+        .onChange(of: appSettings.isPushPresented) { isPresented in
+            refreshWebViewIfSettingsClosed(isPresented)
         }
         .sheet(isPresented: $showKioskSettings) {
             NavigationView {
@@ -48,6 +65,11 @@ struct ConditionalContainerView: View {
 
     private func applyKeepScreenOn() {
         UIApplication.shared.isIdleTimerDisabled = kiosk.shouldKeepScreenOn
+    }
+
+    private func refreshWebViewIfSettingsClosed(_ isPresented: Bool) {
+        guard !isPresented else { return }
+        Current.sceneManager.webViewControllerPromise.done { $0.refreshIfDisconnected() }
     }
 }
 
@@ -97,12 +119,16 @@ struct KioskView: View {
         Button {
             showSettings = true
         } label: {
-            Image(systemSymbol: .gearshapeFill)
-                .font(.body)
-                .foregroundStyle(.white)
-                .padding(DesignSystem.Spaces.one)
-                .background(.black)
-                .clipShape(.circle)
+            KioskSettingsEntryIcon(
+                backgroundColor: Color(
+                    hex: kiosk.settings.settingsEntryBackgroundColor ?? KioskSettingsEntryIcon
+                        .defaultBackgroundColorHex
+                ),
+                iconColor: Color(
+                    hex: kiosk.settings.settingsEntryIconColor ?? KioskSettingsEntryIcon
+                        .defaultIconColorHex
+                )
+            )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(L10n.Kiosk.title)
@@ -118,5 +144,22 @@ struct KioskView: View {
             .clipShape(Capsule())
             .padding(DesignSystem.Spaces.two)
             .allowsHitTesting(false)
+    }
+}
+
+struct KioskSettingsEntryIcon: View {
+    static let defaultBackgroundColorHex = "000000"
+    static let defaultIconColorHex = "FFFFFF"
+
+    var backgroundColor: Color
+    var iconColor: Color
+
+    var body: some View {
+        Image(systemSymbol: .gearshapeFill)
+            .font(.body)
+            .foregroundStyle(iconColor)
+            .padding(DesignSystem.Spaces.one)
+            .background(backgroundColor)
+            .clipShape(.circle)
     }
 }

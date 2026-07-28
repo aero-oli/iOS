@@ -43,6 +43,10 @@ struct CustomWidgetsListView: View {
             Section {
                 WidgetDocumentationLink()
             }
+
+            DebugDatabaseTransferSection(part: .customWidgets) {
+                viewModel.loadWidgets()
+            }
         }
         .onAppear {
             viewModel.loadWidgets()
@@ -133,5 +137,16 @@ struct CustomWidgetsListView: View {
 #Preview {
     NavigationView {
         CustomWidgetsListView()
+    }
+}
+
+extension CustomWidgetsListView: SettingsScreenSearchable {
+    static var settingsSearchEntries: [SettingsSearchEntry] {
+        [
+            SettingsSearchEntry(L10n.Settings.Widgets.YourWidgets.title),
+            SettingsSearchEntry(L10n.Settings.Widgets.Create.title),
+            SettingsSearchEntry(L10n.SettingsDetails.Widgets.ReloadAll.title),
+            SettingsSearchEntry(L10n.Settings.Widgets.Custom.DeleteAll.title),
+        ]
     }
 }

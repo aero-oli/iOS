@@ -102,12 +102,14 @@ final class LiveActivityContractTests: XCTestCase {
             progressMax: 2,
             chronometer: true,
             countdownEnd: Date(timeIntervalSince1970: 0),
+            chronometerStart: Date(timeIntervalSince1970: 0),
             icon: "mdi:test",
             color: "#FF0000",
             url: "/lovelace/0",
             backgroundColor: "#000000",
             textColor: "#FFFFFF",
-            progressBarColor: "#FF9800"
+            progressBarColor: "#FF9800",
+            progressBarDirection: "decreasing"
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
@@ -123,12 +125,14 @@ final class LiveActivityContractTests: XCTestCase {
             "progress_max",
             "chronometer",
             "countdown_end",
+            "chronometer_start",
             "icon",
             "color",
             "url",
             "background_color",
             "text_color",
             "progress_bar_color",
+            "progress_bar_direction",
         ]
         XCTAssertEqual(Set(dict.keys), expectedKeys)
     }
@@ -143,12 +147,14 @@ final class LiveActivityContractTests: XCTestCase {
             progressMax: 3600,
             chronometer: true,
             countdownEnd: Date(timeIntervalSince1970: 1_700_000_000),
+            chronometerStart: Date(timeIntervalSince1970: 1_699_998_800),
             icon: "mdi:washing-machine",
             color: "#2196F3",
             url: "/lovelace/laundry",
             backgroundColor: "#101820",
             textColor: "#FFFFFF",
-            progressBarColor: "#FF9800"
+            progressBarColor: "#FF9800",
+            progressBarDirection: "decreasing"
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
@@ -159,6 +165,102 @@ final class LiveActivityContractTests: XCTestCase {
         let decoded = try! decoder.decode(HALiveActivityAttributes.ContentState.self, from: data)
 
         XCTAssertEqual(decoded, original)
+    }
+
+    /// HA sends `progress`/`progress_max` as JSON numbers that may be fractional (e.g. 20.1234).
+    /// ActivityKit decodes content-state OS-side with a strict JSONDecoder, so a float must not make
+    /// the decode throw — that would silently drop the remote update (stale activity) or reject a
+    /// push-to-start. It must decode, rounded to the nearest Int.
+    func testContentState_progressAsFloat_decodesRounded() throws {
+        let decoded = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m","progress":20.1234,"progress_max":100}"#.utf8)
+        )
+        XCTAssertEqual(decoded.progress, 20)
+        XCTAssertEqual(decoded.progressMax, 100)
+
+        let rounding = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m","progress":20.6}"#.utf8)
+        )
+        XCTAssertEqual(rounding.progress, 21)
+    }
+
+    /// `progress_bar_direction` is stored as the raw wire string; an unrecognised value must
+    /// decode without throwing (a throw would drop the whole OS-side update) and resolve to nil
+    /// so rendering falls back to the default direction.
+    func testContentState_progressBarDirection_decodesLeniently() throws {
+        let decreasing = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m","progress_bar_direction":"decreasing"}"#.utf8)
+        )
+        XCTAssertEqual(decreasing.resolvedProgressBarDirection, .decreasing)
+
+        // Case-insensitive: Android-style automations may send capitalised values.
+        let uppercase = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m","progress_bar_direction":"Increasing"}"#.utf8)
+        )
+        XCTAssertEqual(uppercase.resolvedProgressBarDirection, .increasing)
+
+        let unknown = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m","progress_bar_direction":"sideways"}"#.utf8)
+        )
+        XCTAssertEqual(unknown.progressBarDirection, "sideways")
+        XCTAssertNil(unknown.resolvedProgressBarDirection)
+
+        let missing = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m"}"#.utf8)
+        )
+        XCTAssertNil(missing.progressBarDirection)
+        XCTAssertNil(missing.resolvedProgressBarDirection)
+    }
+
+    /// `decreasing` flips only the visual fill: the bar shows what remains while
+    /// `progressFraction` (used by percent labels) keeps reporting the raw progress.
+    func testContentState_progressBarFillFraction_honorsDirection() {
+        let base = HALiveActivityAttributes.ContentState(
+            message: "m",
+            progress: 30,
+            progressMax: 100
+        )
+        XCTAssertEqual(base.progressBarFillFraction ?? -1, 0.3, accuracy: 0.0001)
+
+        var decreasing = base
+        decreasing.progressBarDirection = "decreasing"
+        XCTAssertEqual(decreasing.progressBarFillFraction ?? -1, 0.7, accuracy: 0.0001)
+        XCTAssertEqual(decreasing.progressFraction ?? -1, 0.3, accuracy: 0.0001)
+
+        var unknown = base
+        unknown.progressBarDirection = "sideways"
+        XCTAssertEqual(unknown.progressBarFillFraction ?? -1, 0.3, accuracy: 0.0001)
+
+        var noProgress = base
+        noProgress.progress = nil
+        noProgress.progressBarDirection = "decreasing"
+        XCTAssertNil(noProgress.progressBarFillFraction)
+    }
+
+    /// A content-state payload without progress keys still decodes, with nil progress.
+    func testContentState_missingProgress_decodesAsNil() throws {
+        let decoded = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m"}"#.utf8)
+        )
+        XCTAssertNil(decoded.progress)
+        XCTAssertNil(decoded.progressMax)
+    }
+
+    /// An out-of-Int-range progress value must degrade to nil rather than trap the OS-side decoder.
+    func testContentState_progressOutOfIntRange_decodesAsNil() throws {
+        let decoded = try JSONDecoder().decode(
+            HALiveActivityAttributes.ContentState.self,
+            from: Data(#"{"message":"m","progress":1e19,"progress_max":100}"#.utf8)
+        )
+        XCTAssertNil(decoded.progress)
+        XCTAssertEqual(decoded.progressMax, 100)
     }
 
     // MARK: - LiveActivityRegistry (webhook contracts)

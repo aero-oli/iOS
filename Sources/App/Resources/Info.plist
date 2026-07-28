@@ -41,16 +41,6 @@
 	<false/>
 	<key>INIntentsSupported</key>
 	<array>
-		<string>CallServiceIntent</string>
-		<string>FireEventIntent</string>
-		<string>GetCameraImageIntent</string>
-		<string>OpenPageIntent</string>
-		<string>RenderTemplateIntent</string>
-		<string>SendLocationIntent</string>
-		<string>UpdateSensorsIntent</string>
-		<string>WidgetOpenPageIntent</string>
-		<string>AssistInAppIntent</string>
-		<string>AssistIntent</string>
 		<string>ReloadWidgetsAppIntent</string>
 		<string>ScriptAppIntent</string>
 	</array>
@@ -96,6 +86,8 @@
 	<string>Authenticate to access kiosk mode settings.</string>
 	<key>NSFocusStatusUsageDescription</key>
 	<string>Report your focus status as a sensor.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Read selected Apple Health metrics so they can be shared with Home Assistant as sensors.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Locate and communicate with your Home Assistant instance.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -125,6 +117,10 @@
 	<string>Photo Library access is needed to allow saving photos from the web view.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Photo Library access is needed to allow saving photos from the web view.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Reminders access is used to sync the Reminders lists you choose with your Home Assistant to-do lists.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Reminders access is used to sync the Reminders lists you choose with your Home Assistant to-do lists.</string>
 	<key>NSSiriUsageDescription</key>
 	<string>We use Siri to allow created shortcuts to interact with the app.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
@@ -135,19 +131,9 @@
 	<true/>
 	<key>NSUserActivityTypes</key>
 	<array>
-		<string>AssistInAppIntent</string>
-		<string>AssistIntent</string>
-		<string>CallServiceIntent</string>
-		<string>FireEventIntent</string>
-		<string>GetCameraImageIntent</string>
 		<string>INSendMessageIntent</string>
-		<string>OpenPageIntent</string>
 		<string>ReloadWidgetsAppIntent</string>
-		<string>RenderTemplateIntent</string>
 		<string>ScriptAppIntent</string>
-		<string>SendLocationIntent</string>
-		<string>UpdateSensorsIntent</string>
-		<string>WidgetOpenPageIntent</string>
 	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
@@ -203,6 +189,11 @@
 			</array>
 		</dict>
 	</dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>io.robbie.homeassistant.backgroundfetch</string>
+		<string>io.robbie.homeassistant.reminderssync</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

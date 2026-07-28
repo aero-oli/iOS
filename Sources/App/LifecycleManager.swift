@@ -71,15 +71,17 @@ class LifecycleManager {
         }.cauterize()
 
         // Resolve the network info (SSID) before the first connect so we don't pick the remote URL while on
-        // the home network and get rejected. On Catalyst the completion is invoked synchronously.
-        Current.connectivity.syncNetworkInformation { [periodicUpdateManager] in
+        // the home network and get rejected.
+        Task { @MainActor [periodicUpdateManager] in
+            await Current.connectivity.refreshNetworkInformation()
             periodicUpdateManager.connectAPI(reason: .cold)
         }
     }
 
     @objc private func willEnterForeground() {
         isActive = true
-        syncNetworkInformation()
+        AppDatabaseSuspension.resume()
+        refreshNetworkInformation()
         syncLiveActivities()
     }
 
@@ -95,6 +97,7 @@ class LifecycleManager {
 
     @objc private func didEnterBackground() {
         isActive = false
+        AppDatabaseSuspension.suspend()
         Current.backgroundTask(withName: BackgroundTask.lifecycleManagerDidEnterBackground.rawValue) { _ in
             when(fulfilled: Current.apis.map { api in
                 api.CreateEvent(
@@ -106,6 +109,7 @@ class LifecycleManager {
 
         periodicUpdateManager.invalidatePeriodicUpdateTimer(forBackground: true)
         DataWidgetsUpdater.update()
+        BackgroundRefreshManager.scheduleAppRefresh()
     }
 
     private var hasTriggeredWarm = false
@@ -127,12 +131,12 @@ class LifecycleManager {
                 )
             })
         }.cauterize()
-        syncNetworkInformation()
+        refreshNetworkInformation()
     }
 
-    private func syncNetworkInformation() {
+    private func refreshNetworkInformation() {
         Task {
-            await Current.connectivity.syncNetworkInformation()
+            await Current.connectivity.refreshNetworkInformation()
         }
     }
 }

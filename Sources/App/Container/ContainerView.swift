@@ -3,12 +3,15 @@ import Shared
 import SwiftUI
 import UIKit
 
-/// Presents app Settings from above the kiosk/container swap (hosted by `ConditionalContainerView`) so that
-/// toggling kiosk mode — reachable via Settings → Kiosk — doesn't tear the Settings sheet down with the
-/// container it would otherwise be presented from.
+/// Drives app Settings presentation from above the kiosk/container swap (hosted by `ConditionalContainerView`)
+/// so that toggling kiosk mode — reachable via Settings → Kiosk — doesn't tear Settings down with the
+/// container it would otherwise be presented from. Settings requested by the frontend external bus is pushed
+/// onto the container's navigation stack; every other entry point (gestures, empty state, …) uses a sheet.
+/// On Catalyst it opens in its own scene.
 final class AppSettingsPresenter: ObservableObject {
     static let shared = AppSettingsPresenter()
-    @Published var isPresented = false
+    @Published var isSheetPresented = false
+    @Published var isPushPresented = false
     private init() {}
 }
 
@@ -21,14 +24,10 @@ struct ContainerView: View {
         Group {
             switch state.screen {
             case let .onboarding(style):
-                // Host onboarding via `embeddedInHostingController()` (inside `OnboardingHostingView`): the
-                // flow reads an `@EnvironmentObject ViewControllerProvider` (e.g. `OnboardingServersListView`,
-                // to present the OAuth flow) that the SwiftUI `WindowGroup` does not inject — a direct render
-                // would crash on first access. `.id(style)` rebuilds the controller if the style changes.
-                OnboardingHostingView(onboardingStyle: style)
+                OnboardingNavigationView(onboardingStyle: style)
                     .id(style)
-            case let .webView(server):
-                HomeAssistantView(server: server) { webViewController in
+            case let .webView(server, initialPath):
+                HomeAssistantView(server: server, initialPath: initialPath) { webViewController in
                     coordinator.setFrontend(webViewController)
                     Current.sceneManager.setWebViewController(webViewController)
                 }
@@ -36,14 +35,20 @@ struct ContainerView: View {
             case .recoveredServerImport:
                 RecoveredServersImportView(onImport: { state.completeRecoveredServerImport() })
             case let .recoveredServerReauth(server):
-                RecoveredServerReauthHostingView(server: server, state: state)
+                RecoveredServerReauthView(server: server, state: state)
             }
         }
         .navigationTitle(" ") // Remove default macOS title
         .onAppear {
             coordinator.onOpenServer = { state.showWebView(for: $0) }
             coordinator.onSetup = { state.reevaluate() }
-            coordinator.onShowSettings = { AppSettingsPresenter.shared.isPresented = true }
+            coordinator.onShowSettings = { pushOntoNavigationStack in
+                if pushOntoNavigationStack, UIDevice.current.userInterfaceIdiom == .phone {
+                    AppSettingsPresenter.shared.isPushPresented = true
+                } else {
+                    AppSettingsPresenter.shared.isSheetPresented = true
+                }
+            }
             coordinator.onShowAssistSettings = { viewModel.presentAssistSettings() }
             coordinator.onShowDownloadManager = { viewModel.presentDownloadManager($0) }
             coordinator.onShowOnboardingPermissions = { viewModel.presentOnboardingPermissions(server: $0, steps: $1) }
@@ -53,19 +58,13 @@ struct ContainerView: View {
                 }
             }
             Current.sceneManager.registerAppCoordinator(coordinator)
-            viewModel.presentLaunchMessagesIfNeeded(isShowingWebView: isShowingWebView)
+            fadeOutLaunchSplashIfNeeded(for: state.screen)
         }
-        .onChange(of: state.screen) { _ in
-            viewModel.presentLaunchMessagesIfNeeded(isShowingWebView: isShowingWebView)
+        .onChange(of: state.screen) { screen in
+            fadeOutLaunchSplashIfNeeded(for: screen)
         }
-        .sheet(item: $viewModel.presentedSheet, onDismiss: { viewModel.showNextLaunchMessage() }) { sheet in
+        .sheet(item: $viewModel.presentedSheet) { sheet in
             switch sheet {
-            case let .whatsNew(release):
-                WhatsNewView(release: release) { WhatsNewEngine().markSeen(release) }
-            case let .testFlight(message):
-                TestFlightCommunicationView(message: message) {
-                    TestFlightCommunicationEngine().markSeen(message)
-                }
             case .assistSettings:
                 AssistSettingsView()
             case let .downloadManager(viewModel):
@@ -78,27 +77,24 @@ struct ContainerView: View {
                 }
             case let .serverSelect(prompt, includeSettings, onSelect):
                 ServerSelectView(prompt: prompt, includeSettings: includeSettings, selectAction: onSelect)
-                    .modify { view in
-                        if #available(iOS 16.4, *) {
-                            view
-                                .presentationDetents([.medium, .large])
-                                .presentationBackground(Color(uiColor: .systemBackground))
-                        } else {
-                            view
-                        }
-                    }
+                    .presentationDetents([.medium, .large])
+                    .presentationBackground(Color(uiColor: .systemBackground))
             }
         }
         .fullScreenCover(item: $viewModel.fullScreenCover, onDismiss: { refreshWebView() }) { cover in
             switch cover {
             case let .onboardingPermissions(server, steps):
                 NavigationView {
-                    OnboardingPermissionsNavigationView(onboardingServer: server, steps: steps)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                CloseButton { viewModel.fullScreenCover = nil }
-                            }
+                    OnboardingPermissionsNavigationView(
+                        onboardingServer: server,
+                        steps: steps,
+                        onDismiss: { viewModel.fullScreenCover = nil }
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            CloseButton { viewModel.fullScreenCover = nil }
                         }
+                    }
                 }
                 .navigationViewStyle(.stack)
                 .injectingViewControllerProvider()
@@ -106,14 +102,20 @@ struct ContainerView: View {
         }
     }
 
+    /// The recovered-server screens have no Home Assistant logo for the launch splash to morph into, so
+    /// fade the splash out as soon as one of them becomes the top-level screen.
+    private func fadeOutLaunchSplashIfNeeded(for screen: OnboardingStateObservable.Screen) {
+        switch screen {
+        case .recoveredServerImport, .recoveredServerReauth:
+            LaunchSplashOverlayState.shared.fadeOut()
+        case .onboarding, .webView:
+            break
+        }
+    }
+
     /// Re-evaluates the web view after a forced cover (onboarding permissions) is dismissed, mirroring the
     /// old `presentOverlayController`'s `onDisappear { refresh() }`.
     private func refreshWebView() {
         Current.sceneManager.webViewControllerPromise.done { $0.refresh() }
-    }
-
-    private var isShowingWebView: Bool {
-        if case .webView = state.screen { return true }
-        return false
     }
 }

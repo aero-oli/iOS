@@ -89,7 +89,7 @@ struct KioskSettingsView: View {
                 }
             }
 
-            Section(L10n.Kiosk.Screensaver.ConfigurationAccess.title) {
+            Section {
                 KioskRow.picker(
                     L10n.Kiosk.Screensaver.ConfigurationAccess.position,
                     icon: .cogOutlineIcon,
@@ -98,6 +98,11 @@ struct KioskSettingsView: View {
                     ForEach(KioskCornerPosition.allCases) { position in
                         Text(position.title).tag(position)
                     }
+                }
+                NavigationLink {
+                    KioskSettingsEntryCustomizationView(viewModel: viewModel)
+                } label: {
+                    KioskRow.label(L10n.Kiosk.Customize.title, icon: .paletteIcon)
                 }
             }
         }
@@ -196,16 +201,27 @@ private extension View {
     // system reverse them when the menu opens upward, so the first option stays on top.
     @ViewBuilder
     func fixedMenuOrder() -> some View {
-        if #available(iOS 16.0, *) {
-            menuOrder(.fixed)
-        } else {
-            self
-        }
+        menuOrder(.fixed)
     }
 }
 
 #Preview {
     NavigationView {
         KioskSettingsView()
+    }
+}
+
+extension KioskSettingsView: SettingsScreenSearchable {
+    static var settingsSearchEntries: [SettingsSearchEntry] {
+        [
+            SettingsSearchEntry(L10n.Kiosk.enabled),
+            SettingsSearchEntry(L10n.Kiosk.Authentication.title),
+            SettingsSearchEntry(L10n.Kiosk.AcceptRemoteCommands.title),
+            SettingsSearchEntry(L10n.Kiosk.Display.dashboard),
+            SettingsSearchEntry(L10n.Kiosk.keepScreenOn),
+            SettingsSearchEntry(L10n.Kiosk.removeHeaderAndSidebar),
+            SettingsSearchEntry(L10n.Kiosk.hideStatusBar),
+            SettingsSearchEntry(L10n.Kiosk.Screensaver.title),
+        ]
     }
 }

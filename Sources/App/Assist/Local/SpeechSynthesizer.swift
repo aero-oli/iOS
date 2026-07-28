@@ -6,18 +6,24 @@ import Shared
 /// strongly-typed reference without coupling to a concrete type.
 protocol SpeechSynthesizerProtocol: AnyObject {
     var onFinished: (() -> Void)? { get set }
+    /// When false, the caller owns the audio session (e.g. CarPlay keeps a .playAndRecord
+    /// session active for the whole conversation) and the synthesizer must not reconfigure it.
+    var managesAudioSession: Bool { get set }
     func speak(_ text: String)
     func stop()
 }
 
 /// A text-to-speech synthesizer using Apple's AVSpeechSynthesizer framework.
 /// Speaks text locally on the device without sending audio data to a server.
-final class SpeechSynthesizer: NSObject, SpeechSynthesizerProtocol, AVSpeechSynthesizerDelegate {
+final class SpeechSynthesizer: NSObject, SpeechSynthesizerProtocol, AVSpeechSynthesizerDelegate, @unchecked Sendable {
     private let synthesizer = AVSpeechSynthesizer()
     private let voice: AVSpeechSynthesisVoice?
 
     /// Called when the synthesizer finishes speaking an utterance.
     var onFinished: (() -> Void)?
+
+    /// Whether this synthesizer reconfigures the shared audio session before speaking.
+    var managesAudioSession = true
 
     /// Initialize using the system default voice.
     override init() {
@@ -37,10 +43,12 @@ final class SpeechSynthesizer: NSObject, SpeechSynthesizerProtocol, AVSpeechSynt
         synthesizer.stopSpeaking(at: .immediate)
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback)
-        } catch {
-            Current.Log.error("Failed to set audio session category for speech synthesis: \(error)")
+        if managesAudioSession {
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback)
+            } catch {
+                Current.Log.error("Failed to set audio session category for speech synthesis: \(error)")
+            }
         }
         synthesizer.speak(utterance)
     }

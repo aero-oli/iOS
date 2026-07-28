@@ -3,13 +3,8 @@ import Foundation
 import HAKit
 import PromiseKit
 import Shared
-import SwiftUI
 
 class OnboardingAuth {
-    func failureController(error: Error) -> UIViewController {
-        UIHostingController(rootView: OnboardingErrorView(error: error))
-    }
-
     var login: OnboardingAuthLogin = OnboardingAuthLoginImpl()
     var tokenExchange: OnboardingAuthTokenExchange = OnboardingAuthTokenExchangeImpl()
     var preSteps: [OnboardingAuthPreStep.Type] = [
@@ -27,17 +22,17 @@ class OnboardingAuth {
 
     func authenticate(
         to startInstance: DiscoveredHomeAssistant,
-        sender: UIViewController
+        presenter: OnboardingAuthPresenter
     ) -> Promise<Server> {
         firstly {
-            connect(to: startInstance, sender: sender)
+            connect(to: startInstance, presenter: presenter)
         }.then { [self] api -> Promise<Server> in
             func steps(_ steps: OnboardingAuthStepPoint...) -> Promise<Void> {
                 var promise: Promise<Void> = .value(())
 
                 for step in steps {
                     promise = promise.then { [self] in
-                        performPostSteps(checkPoint: step, api: api, sender: sender)
+                        performPostSteps(checkPoint: step, api: api, presenter: presenter)
                     }
                 }
 
@@ -76,12 +71,12 @@ class OnboardingAuth {
     private func performPreSteps(
         checkPoint: OnboardingAuthStepPoint,
         authDetails: OnboardingAuthDetails,
-        sender: UIViewController
+        presenter: OnboardingAuthPresenter
     ) -> Promise<Void> {
         Current.Log.info(checkPoint)
         return perform(checkPoint: checkPoint, checks: preSteps.compactMap { checkType in
             if checkType.supportedPoints.contains(checkPoint) {
-                return checkType.init(authDetails: authDetails, sender: sender)
+                return checkType.init(authDetails: authDetails, presenter: presenter)
             } else {
                 return nil
             }
@@ -91,12 +86,12 @@ class OnboardingAuth {
     private func performPostSteps(
         checkPoint: OnboardingAuthStepPoint,
         api: HomeAssistantAPI,
-        sender: UIViewController
+        presenter: OnboardingAuthPresenter
     ) -> Promise<Void> {
         Current.Log.info(checkPoint)
         return perform(checkPoint: checkPoint, checks: postSteps.compactMap { checkType in
             if checkType.supportedPoints.contains(checkPoint) {
-                return checkType.init(api: api, sender: sender)
+                return checkType.init(api: api, presenter: presenter)
             } else {
                 return nil
             }
@@ -105,7 +100,7 @@ class OnboardingAuth {
 
     private func connect(
         to baseInstance: DiscoveredHomeAssistant,
-        sender: UIViewController
+        presenter: OnboardingAuthPresenter
     ) -> Promise<HomeAssistantAPI> {
         // we prefer internal URL first, if it's available
         var instances = [(URL, DiscoveredHomeAssistant)]()
@@ -127,9 +122,9 @@ class OnboardingAuth {
                 let authDetails = try OnboardingAuthDetails(baseURL: url)
 
                 return firstly {
-                    performPreSteps(checkPoint: .beforeAuth, authDetails: authDetails, sender: sender)
+                    performPreSteps(checkPoint: .beforeAuth, authDetails: authDetails, presenter: presenter)
                 }.then { [self] in
-                    login.open(authDetails: authDetails, sender: sender)
+                    login.open(authDetails: authDetails, presenter: presenter)
                 }.then { [self] result -> Promise<HomeAssistantAPI> in
                     // The login web view may have been redirected to a different port/scheme; adopt that
                     // address so the stored server URL (and the token exchange) target the real server.
@@ -192,29 +187,42 @@ class OnboardingAuth {
     ) -> Promise<HomeAssistantAPI> {
         Current.Log.info()
 
-        var connectionInfo = ConnectionInfo(discovered: instance, authDetails: authDetails)
+        return Promise { seal in
+            Task { [self] in
+                do {
+                    let currentSSID = await Current.connectivity.currentWiFiSSID()
+                    var connectionInfo = ConnectionInfo(
+                        discovered: instance,
+                        authDetails: authDetails,
+                        currentSSID: currentSSID
+                    )
 
-        return tokenExchange.tokenInfo(
-            code: code,
-            connectionInfo: &connectionInfo
-        ).then { tokenInfo -> Promise<HomeAssistantAPI> in
-            Current.Log.verbose()
+                    let tokenInfo = try await tokenExchange.tokenInfo(
+                        code: code,
+                        connectionInfo: &connectionInfo
+                    )
 
-            var serverInfo = ServerInfo(
-                name: ServerInfo.defaultName,
-                connection: connectionInfo,
-                token: tokenInfo,
-                version: instance.version ?? DiscoveredHomeAssistant.defaultVersion
-            )
+                    Current.Log.verbose()
 
-            let identifier = Identifier<Server>(rawValue: instance.uuid ?? UUID().uuidString)
-            let server = Server(
-                identifier: identifier,
-                getter: { serverInfo },
-                setter: { serverInfo = $0; return true }
-            )
+                    var serverInfo = ServerInfo(
+                        name: ServerInfo.defaultName,
+                        connection: connectionInfo,
+                        token: tokenInfo,
+                        version: instance.version ?? DiscoveredHomeAssistant.defaultVersion
+                    )
 
-            return .value(HomeAssistantAPI(server: server))
+                    let identifier = Identifier<Server>(rawValue: instance.uuid ?? UUID().uuidString)
+                    let server = Server(
+                        identifier: identifier,
+                        getter: { serverInfo },
+                        setter: { serverInfo = $0; return true }
+                    )
+
+                    seal.fulfill(HomeAssistantAPI(server: server))
+                } catch {
+                    seal.reject(error)
+                }
+            }
         }
     }
 
@@ -230,7 +238,7 @@ class OnboardingAuth {
 }
 
 private extension ConnectionInfo {
-    init(discovered: DiscoveredHomeAssistant, authDetails: OnboardingAuthDetails) {
+    init(discovered: DiscoveredHomeAssistant, authDetails: OnboardingAuthDetails, currentSSID: String?) {
         self.init(
             externalURL: discovered.externalURL,
             internalURL: discovered.internalURL,
@@ -238,7 +246,7 @@ private extension ConnectionInfo {
             remoteUIURL: nil,
             webhookID: "",
             webhookSecret: nil,
-            internalSSIDs: Current.connectivity.currentWiFiSSID().map { [$0] },
+            internalSSIDs: currentSSID.map { [$0] },
             internalHardwareAddresses: nil,
             isLocalPushEnabled: false,
             securityExceptions: authDetails.exceptions,

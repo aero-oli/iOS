@@ -20,13 +20,15 @@ struct EntityPicker: View {
     init(
         selectedServerId: String? = nil,
         selectedEntity: Binding<HAAppEntity?>,
-        domainFilter: Domain?,
-        mode: Mode = .button
+        domainFilter: [Domain]?,
+        mode: Mode = .button,
+        initialSearchTerm: String? = nil
     ) {
         self._selectedEntity = selectedEntity
         self._viewModel = .init(wrappedValue: EntityPickerViewModel(
             domainFilter: domainFilter,
-            selectedServerId: selectedServerId
+            selectedServerId: selectedServerId,
+            initialSearchTerm: initialSearchTerm
         ))
         self.mode = mode
     }
@@ -75,15 +77,8 @@ struct EntityPicker: View {
         }
         #endif
         .navigationViewStyle(.stack)
-        .modify { view in
-            if #available(iOS 16.0, *) {
-                view
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
-            } else {
-                view
-            }
-        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 
     private var content: some View {
@@ -95,7 +90,9 @@ struct EntityPicker: View {
                     .padding()
                     .modify { view in
                         if #available(iOS 26.0, *) {
-                            view.glassEffect(.regular.interactive(), in: .capsule)
+                            view
+                                .glassEffect(.regular.interactive(), in: .capsule)
+                                .contentShape(Capsule())
 
                         } else {
                             view
@@ -107,12 +104,9 @@ struct EntityPicker: View {
                     .listRowSeparator(.hidden)
             }
             filtersView
-            ForEach(
-                viewModel.filteredEntitiesByGroup.sorted(by: { $0.key < $1.key }),
-                id: \.key
-            ) { group, filteredEntities in
-                Section(group.uppercased()) {
-                    ForEach(filteredEntities, id: \.id) { entity in
+            ForEach(viewModel.filteredGroups) { group in
+                Section(group.title.uppercased()) {
+                    ForEach(group.entities, id: \.id) { entity in
                         Button(action: {
                             selectedEntity = entity
                             viewModel.showList = false

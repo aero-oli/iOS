@@ -1,7 +1,6 @@
 import Foundation
 import KeychainAccess
 import UIKit
-import Version
 
 /// Contains shared constants
 public enum AppConstants {
@@ -30,6 +29,10 @@ public enum AppConstants {
             URL(string: "https://companion.home-assistant.io/app/ios/local-push")!
         public static var nfcDocs =
             URL(string: "https://companion.home-assistant.io/app/ios/nfc")!
+        public static var liveActivitiesDocs =
+            URL(string: "https://companion.home-assistant.io/docs/notifications/live-activities")!
+        public static var appleDropSupportiOS15 =
+            URL(string: "https://ohf.to/ha/apple-drop-support")!
     }
 
     public enum QueryItems: String, CaseIterable {
@@ -161,7 +164,6 @@ public enum AppConstants {
         )
     }
 
-    @available(iOS 16.0, watchOS 9.0, *)
     public static func todoListAddItemURL(listId: String, serverId: String) -> URL? {
         guard !serverId.isEmpty, !listId.isEmpty else {
             return nil
@@ -173,7 +175,6 @@ public enum AppConstants {
         ])
     }
 
-    @available(iOS 16.0, watchOS 9.0, *)
     public static func todoListOpenURL(listId: String, serverId: String) -> URL? {
         guard !serverId.isEmpty, !listId.isEmpty else {
             return nil
@@ -205,7 +206,8 @@ public enum AppConstants {
         let groupDir = fileManager.containerURL(forSecurityApplicationGroupIdentifier: AppConstants.AppGroupID)
 
         guard let groupDir else {
-            fatalError("Unable to get groupDir.")
+            Current.Log.error("Unable to get app group container URL; falling back to temporary directory")
+            return URL(fileURLWithPath: NSTemporaryDirectory())
         }
 
         return groupDir
@@ -389,9 +391,11 @@ public extension Version {
     static let localPushConfirm: Version = .init(major: 2021, minor: 10, prerelease: "any0")
     static let externalBusCommandRestart: Version = .init(major: 2021, minor: 12, prerelease: "b6")
     static let updateLocationGPSOptional: Version = .init(major: 2022, minor: 2, prerelease: "any0")
-    static let fullWebhookSecretKey: Version = .init(major: 2022, minor: 3)
     static let conversationWebhook: Version = .init(major: 2023, minor: 2, prerelease: "any0")
     static let externalBusCommandSidebar: Version = .init(major: 2023, minor: 4, prerelease: "b3")
+    /// render_template accepts `report_errors`, so template errors arrive as subscription events
+    /// instead of being logged only server-side.
+    static let canReportTemplateErrors: Version = .init(major: 2023, minor: 9)
     static let externalBusCommandAutomationEditor: Version = .init(major: 2024, minor: 2, prerelease: "any0")
     static let canUseAppThemeForStatusBar: Version = .init(major: 2024, minor: 7)
     /// The version where the app can subscribe to entities changes with a filter (e.g. only state changes from sensor
@@ -405,6 +409,10 @@ public extension Version {
     static let quickSearchKeyboardShortcut: Version = .init(major: 2026, minor: 2, prerelease: "any0")
     /// Core accepts `in_zones` in update_location payloads from 2026.6.0.
     static let inZonesOnLocationUpdate: Version = .init(major: 2026, minor: 6, patch: 0, prerelease: "any0")
+    /// Frontend sends `frontend/loaded` when its launch screen is removed from 2026.8.0.
+    static let frontendLoadedExternalBus: Version = .init(major: 2026, minor: 8, patch: 0, prerelease: "any0")
+    /// Frontend handles safe-area insets itself from 2026.8.0, so the app can display edge-to-edge by default.
+    static let canDisplayEdgeToEdge: Version = .init(major: 2026, minor: 8, patch: 0, prerelease: "any0")
 
     var coreRequiredString: String {
         L10n.requiresVersion(String(format: "core-%d.%d", major, minor ?? -1))

@@ -1,7 +1,7 @@
 import HAKit
+import HAKit_Mocks
 import PromiseKit
 @testable import Shared
-import Version
 import XCTest
 
 class LocalPushManagerTests: XCTestCase {
@@ -47,13 +47,21 @@ class LocalPushManagerTests: XCTestCase {
         }
     }
 
-    private func setUpManager(webhookID: String, version: Version? = nil) {
+    private func setUpManager(
+        webhookID: String,
+        version: Version? = nil,
+        notificationCommunicationDecorator: NotificationCommunicationDecorator =
+            NotificationCommunicationDecoratorImpl()
+    ) {
         api.server.info.connection.webhookID = webhookID
         if let version {
             api.server.info.version = version
         }
 
-        manager = LocalPushManager(server: api.server)
+        manager = LocalPushManager(
+            server: api.server,
+            notificationCommunicationDecorator: notificationCommunicationDecorator
+        )
         manager.add = { [weak self] request in
             let (promise, resolver) = Promise<Void>.pending()
             self?.added.append((request, resolver))
@@ -382,6 +390,66 @@ class LocalPushManagerTests: XCTestCase {
         )
     }
 
+    func testEventCommunicationDecoratorInvoked() throws {
+        class SpyDecorator: NotificationCommunicationDecorator {
+            var decorateCalled = false
+            var apiUsed: HomeAssistantAPI?
+            let decoratedBody = "decorated_body"
+
+            func decorate(
+                content: UNNotificationContent,
+                sender: NotificationSenderInfo,
+                api: HomeAssistantAPI?
+            ) async -> UNNotificationContent {
+                decorateCalled = true
+                apiUsed = api
+                let decoratedContent = UNMutableNotificationContent()
+                decoratedContent.body = decoratedBody
+                return decoratedContent
+            }
+        }
+
+        let spy = SpyDecorator()
+
+        setUpManager(webhookID: "webhook1", notificationCommunicationDecorator: spy)
+
+        let expectation1 = expectation(description: "contentRequestsChanged")
+        attachmentManager.contentRequestsChanged = {
+            expectation1.fulfill()
+        }
+
+        let sub = try XCTUnwrap(apiConnection.pendingSubscriptions.first)
+        sub.handler(sub.cancellable, .dictionary([
+            "message": "test_message",
+            "notification_icon": "mdi:dishwasher",
+            "data": [
+                "tag": "test_tag",
+            ],
+        ]))
+
+        waitForExpectations(timeout: 10.0)
+
+        let req = try XCTUnwrap(attachmentManager.contentRequests.first)
+        req.1(with(UNMutableNotificationContent()) {
+            $0.body = "test_message_modified"
+            $0.title = "test_title"
+            $0.userInfo = [
+                "notification_icon": "mdi:dishwasher",
+            ]
+        })
+
+        let expectation2 = expectation(description: "addedChanged")
+        addedChanged = {
+            expectation2.fulfill()
+        }
+
+        waitForExpectations(timeout: 10.0)
+
+        XCTAssertTrue(spy.decorateCalled)
+        XCTAssertIdentical(spy.apiUsed, api)
+        XCTAssertEqual(added.last?.0.content.body, spy.decoratedBody)
+    }
+
     func testSilentLiveActivityCommandSuppressesBannerAndDefersConfirm() throws {
         setUpManager(webhookID: "webhook1")
 
@@ -408,9 +476,10 @@ class LocalPushManagerTests: XCTestCase {
         )
     }
 
-    func testNonSilentLiveActivityCommandPresentsAlertAndDefersConfirm() throws {
-        // A live_update without `silent: true` should alert (sound + haptics) on start/update,
-        // while still deferring the confirm to the live activity presentation path.
+    func testNonSilentLiveActivityCommandSuppressesBannerAndDefersConfirm() throws {
+        // A live_update without `silent: true` must behave like the silent case: only update the
+        // Live Activity, never present a standalone banner, and defer the confirm to the live
+        // activity presentation path.
         setUpManager(webhookID: "webhook1")
 
         let sub = try XCTUnwrap(apiConnection.pendingSubscriptions.first)
@@ -427,9 +496,8 @@ class LocalPushManagerTests: XCTestCase {
         DispatchQueue.main.async(execute: runLoop.fulfill)
         waitForExpectations(timeout: 10.0)
 
-        let request = try XCTUnwrap(added.first?.0)
-        XCTAssertNotNil(request.content.sound)
-        // Confirm is still owned by the live activity path, not sent here.
+        XCTAssertTrue(attachmentManager.contentRequests.isEmpty)
+        XCTAssertTrue(added.isEmpty)
         XCTAssertFalse(
             apiConnection.pendingRequests
                 .contains(where: { $0.request.type == "mobile_app/push_notification_confirm" })
@@ -451,6 +519,7 @@ class LocalPushManagerTests: XCTestCase {
                 "background_color": "#101820",
                 "text_color": "#FFFFFF",
                 "progress_bar_color": "#03A9F4",
+                "progress_bar_direction": "decreasing",
             ],
         ]))
 
@@ -459,6 +528,7 @@ class LocalPushManagerTests: XCTestCase {
         XCTAssertEqual(ha["background_color"] as? String, "#101820")
         XCTAssertEqual(ha["text_color"] as? String, "#FFFFFF")
         XCTAssertEqual(ha["progress_bar_color"] as? String, "#03A9F4")
+        XCTAssertEqual(ha["progress_bar_direction"] as? String, "decreasing")
         XCTAssertEqual(ha["notification_icon_color"] as? String, "#FF0000")
     }
 

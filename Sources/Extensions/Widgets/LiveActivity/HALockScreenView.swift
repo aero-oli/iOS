@@ -16,6 +16,10 @@ struct HALockScreenView: View {
     /// Icon size for the MDI icon in the header row.
     private static let iconSize: CGFloat = 28
 
+    /// Lets the trailing value (e.g. "100%") shrink to fit on one line instead of
+    /// wrapping the "%" onto a second line when horizontal space is tight.
+    private static let trailingValueMinimumScaleFactor: CGFloat = 0.7
+
     var body: some View {
         VStack(alignment: .leading, spacing: DesignSystem.Spaces.oneAndHalf) {
             HStack(alignment: .top, spacing: DesignSystem.Spaces.oneAndHalf) {
@@ -28,10 +32,9 @@ struct HALockScreenView: View {
                         .lineLimit(1)
 
                     if state.chronometer == true, let end = state.countdownEnd {
-                        Text(timerInterval: Date.now ... end, countsDown: true)
+                        HAActivityChronometerText(end: end, start: state.chronometerStart)
                             .font(.title3.monospacedDigit().weight(.medium))
                             .foregroundStyle(secondaryTextColor)
-                            .contentTransition(.numericText(countsDown: true))
                     } else {
                         Text(state.message)
                             .font(.body)
@@ -45,7 +48,7 @@ struct HALockScreenView: View {
                 trailingValue
             }
 
-            if let fraction = state.progressFraction {
+            if let fraction = state.progressBarFillFraction {
                 HAActivityProgressBar(
                     fraction: fraction,
                     fillColor: barColor,
@@ -53,7 +56,12 @@ struct HALockScreenView: View {
                     height: 10
                 )
             } else if state.chronometer == true, let end = state.countdownEnd {
-                HAActivityTimerProgressBar(end: end, tint: barColor)
+                HAActivityTimerProgressBar(
+                    start: state.chronometerStart,
+                    end: end,
+                    tint: barColor,
+                    direction: state.resolvedProgressBarDirection
+                )
             }
         }
         .padding(.horizontal, DesignSystem.Spaces.two)
@@ -67,10 +75,10 @@ struct HALockScreenView: View {
         if state.icon != nil {
             ZStack {
                 RoundedRectangle(cornerRadius: DesignSystem.CornerRadius.oneAndHalf, style: .continuous)
-                    .fill(accentColor.opacity(useLightText ? 0.2 : 0.14))
+                    .fill(accentColor.opacity(0.2))
                     .overlay {
                         RoundedRectangle(cornerRadius: DesignSystem.CornerRadius.oneAndHalf, style: .continuous)
-                            .strokeBorder(accentColor.opacity(useLightText ? 0.3 : 0.18))
+                            .strokeBorder(accentColor.opacity(0.28))
                     }
 
                 iconView
@@ -96,15 +104,18 @@ struct HALockScreenView: View {
 
     @ViewBuilder
     private var trailingValue: some View {
-        if let fraction = state.progressFraction {
-            Text(HAActivityVisualStyle.percentString(for: fraction))
-                .font(.headline.monospacedDigit())
-                .foregroundStyle(primaryTextColor)
-        } else if let critical = state.criticalText {
+        if let critical = state.criticalText {
             Text(critical)
                 .font(.headline)
                 .foregroundStyle(primaryTextColor)
                 .lineLimit(1)
+                .minimumScaleFactor(Self.trailingValueMinimumScaleFactor)
+        } else if let fraction = state.progressFraction {
+            Text(HAActivityVisualStyle.percentString(for: fraction))
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(primaryTextColor)
+                .lineLimit(1)
+                .minimumScaleFactor(Self.trailingValueMinimumScaleFactor)
         }
     }
 
@@ -120,40 +131,36 @@ struct HALockScreenView: View {
         HAActivityVisualStyle.color(from: state.progressBarColor ?? state.color)
     }
 
-    /// Luma of the resolved background — drives element opacities and the auto-contrast default.
-    private var useLightText: Bool {
-        HAActivityVisualStyle.prefersLightText(onBackground: state.backgroundColor)
-    }
-
-    /// Explicit `text_color`, else the auto-contrast default.
-    private var foreground: Color {
+    /// Explicit `text_color` or auto-contrast against an explicit `background_color`, else nil so
+    /// primary/secondary text fall back to the adaptive system colors. Those stay legible on the
+    /// transparent Lock Screen material without us inspecting the color scheme.
+    private var resolvedForeground: Color? {
         HAActivityVisualStyle.foregroundColor(textColor: state.textColor, onBackground: state.backgroundColor)
     }
 
     private var primaryTextColor: Color {
-        foreground
+        resolvedForeground ?? .primary
     }
 
     private var secondaryTextColor: Color {
-        foreground.opacity(useLightText ? 0.8 : 0.72)
+        resolvedForeground?.opacity(0.8) ?? .secondary
     }
 
     private var trackColor: Color {
-        foreground.opacity(useLightText ? 0.14 : 0.08)
+        (resolvedForeground ?? .primary).opacity(0.12)
     }
 }
 
 enum HAActivityVisualStyle {
     /// Hex string for Home Assistant brand blue — used for UIColor(hex:) fallback.
     private static let haBlueHex = "#03A9F4"
+    private static let supplementalBackgroundHex = "#1C1C1E"
 
-    /// Default Lock Screen background. Forced (not adaptive) to avoid a start-up flash where the
-    /// system background resolves to the wrong appearance; overridable via `background_color`.
-    private static let defaultBackgroundHex = "#000000"
+    static let defaultSupplementalForegroundColor = Color.white
 
     /// Treats nil, empty, or whitespace-only as "unset" so the caller's default applies — an empty
     /// `background_color`/`text_color` would otherwise parse to transparent via UIColor(hex:).
-    private static func normalized(_ hex: String?) -> String? {
+    static func normalized(_ hex: String?) -> String? {
         let trimmed = hex?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false) ? trimmed : nil
     }
@@ -162,21 +169,39 @@ enum HAActivityVisualStyle {
         UIColor(hex: color ?? haBlueHex)
     }
 
+    /// Explicit `background_color`, else `.clear` so the Lock Screen's own translucent,
+    /// appearance-adaptive material shows through. A nil tint makes ActivityKit fall back to an
+    /// opaque (black) default instead, so `.clear` is what actually yields a transparent background.
     static func backgroundColor(from hex: String?) -> Color {
-        Color(uiColor: UIColor(hex: normalized(hex) ?? defaultBackgroundHex))
+        guard let hex = normalized(hex) else { return .clear }
+        return Color(uiColor: UIColor(hex: hex))
     }
 
-    static func prefersLightText(onBackground hex: String?) -> Bool {
+    static func supplementalBackgroundColor(from hex: String?) -> Color {
+        Color(uiColor: UIColor(hex: normalized(hex) ?? supplementalBackgroundHex))
+    }
+
+    /// Whether light text reads best on the given opaque background hex, by Rec. 601 luma.
+    static func prefersLightText(onBackground hex: String) -> Bool {
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        UIColor(hex: normalized(hex) ?? defaultBackgroundHex).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        UIColor(hex: hex).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         return (0.299 * red + 0.587 * green + 0.114 * blue) < 0.6
     }
 
-    /// Explicit `text_color` if set, else a light/dark default chosen to contrast the background.
-    static func foregroundColor(textColor: String?, onBackground backgroundHex: String?) -> Color {
+    /// Foreground that can be resolved without the render environment:
+    ///   - explicit `text_color`, else
+    ///   - a black/white auto-contrast against an opaque `background_color`.
+    /// Nil when neither applies (including a fully transparent `background_color` such as
+    /// "clear"/"transparent"/an alpha-0 hex), so the caller falls back to the adaptive system
+    /// color (`.primary`), which stays legible on the transparent Lock Screen material.
+    static func foregroundColor(textColor: String?, onBackground backgroundHex: String?) -> Color? {
         if let textColor = normalized(textColor) {
             return Color(uiColor: UIColor(hex: textColor))
         }
+        guard let backgroundHex = normalized(backgroundHex) else { return nil }
+        var alpha: CGFloat = 0
+        UIColor(hex: backgroundHex).getRed(nil, green: nil, blue: nil, alpha: &alpha)
+        guard alpha > 0 else { return nil }
         return prefersLightText(onBackground: backgroundHex) ? .white : .black
     }
 

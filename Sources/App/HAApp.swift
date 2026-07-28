@@ -14,12 +14,21 @@ struct HAApp: App {
                 .toastOverlay()
                 .onOpenURL { handleIncoming(url: $0) }
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { handleIncoming(userActivity: $0) }
+                // SwiftUI copy of the launch screen; hides the system-splash → first-screen hand-off by
+                // morphing the splash logo into the first screen's logo before fading out.
+                .overlay { LaunchSplashOverlayView(state: .shared) }
+                .toggleStyle(BrandedSwitchToggleStyle())
         }
         .handlesExternalEvents(matching: [SceneActivity.webView.activityIdentifier])
+        .commands {
+            MainWindowGroupCommands()
+            AppMenuBarCommands()
+        }
 
         // Mac Settings
         WindowGroup {
             SettingsView()
+                .toggleStyle(BrandedSwitchToggleStyle())
         }
         .handlesExternalEvents(matching: [SceneActivity.settings.activityIdentifier])
 
@@ -29,18 +38,21 @@ struct HAApp: App {
                 AboutView()
             }
             .navigationViewStyle(.stack)
+            .toggleStyle(BrandedSwitchToggleStyle())
         }
         .handlesExternalEvents(matching: [SceneActivity.about.activityIdentifier])
 
         // Mac Assist
         WindowGroup {
             AssistWindowView()
+                .toggleStyle(BrandedSwitchToggleStyle())
         }
         .handlesExternalEvents(matching: [SceneActivity.assist.activityIdentifier])
 
         // Mac Onboarding
         WindowGroup {
-            OnboardingHostingView(onboardingStyle: .secondary)
+            OnboardingNavigationView(onboardingStyle: .secondary)
+                .toggleStyle(BrandedSwitchToggleStyle())
         }
         .handlesExternalEvents(matching: [SceneActivity.onboarding.activityIdentifier])
     }

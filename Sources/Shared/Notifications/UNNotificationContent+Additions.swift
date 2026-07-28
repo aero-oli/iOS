@@ -38,8 +38,16 @@ public extension UNNotificationContent {
     }
 
     var userInfoActions: [UNNotificationAction] {
-        userInfoActionConfigs
+        let maxActions = 10
+
+        let payloadActions = userInfoActionConfigs
             .map(NotificationAction.init(action:))
             .map(\.action)
+
+        guard payloadActions.isEmpty else {
+            return Array(payloadActions.prefix(maxActions))
+        }
+
+        return Array(NotificationSnoozeAction.enabledActions().prefix(maxActions))
     }
 }

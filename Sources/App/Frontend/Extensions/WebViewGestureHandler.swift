@@ -1,7 +1,5 @@
 import Foundation
-import MBProgressHUD
 import Shared
-import Version
 
 // MARK: - Gestures
 
@@ -9,6 +7,9 @@ final class WebViewGestureHandler {
     weak var webView: WebViewControllerProtocol?
 
     func handleGestureAction(_ action: HAGestureAction) {
+        if action != .none {
+            Current.impactFeedback.impactOccurred(style: .light)
+        }
         switch action {
         case .assist:
             showAssistThroughKeyEvent()
@@ -18,6 +19,8 @@ final class WebViewGestureHandler {
             webViewNavigateBack()
         case .nextPage:
             webViewNavigateForward()
+        case .smartBack:
+            smartBack()
         case .showServersList:
             showServersList()
         case .nextServer:
@@ -45,17 +48,25 @@ final class WebViewGestureHandler {
     private func showSidebar() {
         webView?.webViewExternalMessageHandler
             .sendExternalBus(message: .init(command: WebViewExternalBusOutgoingMessage.showSidebar.rawValue))
+            .cauterize()
     }
 
-    private func webViewNavigateBack() {
-        if webView?.canGoBack ?? false {
-            webView?.goBack()
-        }
+    @discardableResult
+    private func webViewNavigateBack() -> Bool {
+        guard webView?.canGoBack ?? false else { return false }
+        webView?.goBack()
+        return true
     }
 
     private func webViewNavigateForward() {
         if webView?.canGoForward ?? false {
             webView?.goForward()
+        }
+    }
+
+    private func smartBack() {
+        if !webViewNavigateBack() {
+            showSidebar()
         }
     }
 
@@ -143,14 +154,7 @@ final class WebViewGestureHandler {
         let nextServer = servers[nextIndex]
 
         Current.sceneManager.appCoordinator.done { coordinator in
-            coordinator.open(server: nextServer).done { frontend in
-                guard let window = frontend.presentationWindow else { return }
-                let hud = MBProgressHUD.showAdded(to: window, animated: true)
-                hud.isUserInteractionEnabled = false
-                hud.mode = .text
-                hud.label.text = nextServer.info.name
-                hud.hide(animated: true, afterDelay: 1.0)
-            }
+            coordinator.open(server: nextServer)
         }
     }
 }

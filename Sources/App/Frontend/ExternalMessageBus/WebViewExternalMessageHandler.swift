@@ -58,12 +58,13 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
         if let externalBusMessage = WebViewExternalBusMessage(rawValue: incomingMessage.MessageType) {
             switch externalBusMessage {
             case .configGet:
+                let configResult = WebViewExternalBusMessage.configResult
                 response = Guarantee { seal in
                     DispatchQueue.global(qos: .userInitiated).async {
                         seal(WebSocketMessage(
                             id: incomingMessage.ID!,
                             type: "result",
-                            result: WebViewExternalBusMessage.configResult
+                            result: configResult
                         ))
                     }
                 }
@@ -81,6 +82,8 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
                     return
                 }
                 webViewController.updateFrontendConnectionState(state: connEvt)
+            case .frontendLoaded:
+                webViewController.updateFrontendConnectionState(state: FrontEndConnectionState.loaded.rawValue)
             case .tagRead:
                 response = Current.tags.readNFC().map { tag in
                     WebSocketMessage(id: incomingMessage.ID!, type: "result", result: ["success": true, "tag": tag])
@@ -189,7 +192,6 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
                 }
                 handleEntityAddTo(entityId: entityId, appPayload: appPayload)
             case .cameraPlayerShow:
-                guard #available(iOS 16.0, *) else { return }
                 guard let entityId = incomingMessage.Payload?["entity_id"] as? String else {
                     Current.Log.error("Received camera/show but entity_id was not string! \(incomingMessage)")
                     return
@@ -208,7 +210,7 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
     // swiftlint:enable cyclomatic_complexity
 
     func showSettingsViewController() {
-        Current.sceneManager.appCoordinator.done { $0.showSettings() }
+        Current.sceneManager.appCoordinator.done { $0.showSettings(pushOntoNavigationStack: true) }
     }
 
     @MainActor
@@ -309,34 +311,30 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
             return
         }
 
-        if #available(iOS 16.4, *) {
-            let threadManagementView =
-                UIHostingController(
-                    rootView: ThreadCredentialsSharingView<ThreadTransferCredentialToHAViewModel>
-                        .buildTransferToHomeAssistant(server: webViewController.server)
-                )
-            threadManagementView.view.backgroundColor = .clear
-            threadManagementView.modalPresentationStyle = .overFullScreen
-            threadManagementView.modalTransitionStyle = .crossDissolve
-            webViewController.presentOverlayController(controller: threadManagementView, animated: true)
-        }
+        let threadManagementView =
+            UIHostingController(
+                rootView: ThreadCredentialsSharingView<ThreadTransferCredentialToHAViewModel>
+                    .buildTransferToHomeAssistant(server: webViewController.server)
+            )
+        threadManagementView.view.backgroundColor = .clear
+        threadManagementView.modalPresentationStyle = .overFullScreen
+        threadManagementView.modalTransitionStyle = .crossDissolve
+        webViewController.presentOverlayController(controller: threadManagementView, animated: true)
     }
 
     private func transferHAThreadCredentialsToKeychain(macExtendedAddress: String, activeOperationalDataset: String) {
-        if #available(iOS 16.4, *) {
-            let threadManagementView =
-                UIHostingController(
-                    rootView: ThreadCredentialsSharingView<ThreadTransferCredentialToKeychainViewModel>
-                        .buildTransferToAppleKeychain(
-                            macExtendedAddress: macExtendedAddress,
-                            activeOperationalDataset: activeOperationalDataset
-                        )
-                )
-            threadManagementView.view.backgroundColor = .clear
-            threadManagementView.modalPresentationStyle = .overFullScreen
-            threadManagementView.modalTransitionStyle = .crossDissolve
-            webViewController?.presentOverlayController(controller: threadManagementView, animated: true)
-        }
+        let threadManagementView =
+            UIHostingController(
+                rootView: ThreadCredentialsSharingView<ThreadTransferCredentialToKeychainViewModel>
+                    .buildTransferToAppleKeychain(
+                        macExtendedAddress: macExtendedAddress,
+                        activeOperationalDataset: activeOperationalDataset
+                    )
+            )
+        threadManagementView.view.backgroundColor = .clear
+        threadManagementView.modalPresentationStyle = .overFullScreen
+        threadManagementView.modalTransitionStyle = .crossDissolve
+        webViewController?.presentOverlayController(controller: threadManagementView, animated: true)
     }
 
     private func barcodeScannerRequested(
@@ -441,7 +439,7 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
         if #available(iOS 18, *) {
             ToastPresenter.shared.show(
                 id: payload.id,
-                symbol: SFSymbol.infoCircleFill.rawValue,
+                symbol: .infoCircleFill,
                 symbolForegroundStyle: (.white, .haPrimary),
                 title: payload.message,
                 message: "",
@@ -485,7 +483,7 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
         sendExternalBus(message: .init(
             command: WebViewExternalBusOutgoingMessage.matterCommissionFinish.rawValue,
             payload: [
-                "name": deviceName,
+                "name": deviceName as Any,
                 "success": success,
             ]
         ))
@@ -615,7 +613,6 @@ final class WebViewExternalMessageHandler: @preconcurrency WebViewExternalMessag
         }
     }
 
-    @available(iOS 16.0, *)
     private func showCameraPlayer(entityId: String, cameraName: String?) {
         guard let webViewController else {
             Current.Log.error("WebViewController not available while opening camera player")

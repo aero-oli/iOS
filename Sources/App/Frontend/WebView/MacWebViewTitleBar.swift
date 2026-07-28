@@ -15,21 +15,14 @@ struct MacWebViewTitleBar: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIViewController {
-        MacWebViewTitleBarViewController { [weak coordinator = context.coordinator] viewController in
-            coordinator?.configure(
-                windowScene: viewController.view.window?.windowScene,
-                server: server,
-                webViewController: webViewController
-            )
+        MacWebViewTitleBarViewController { [weak coordinator = context.coordinator] windowScene in
+            coordinator?.attach(to: windowScene)
         }
     }
 
     func updateUIViewController(_ viewController: UIViewController, context: Context) {
-        context.coordinator.configure(
-            windowScene: viewController.view.window?.windowScene,
-            server: server,
-            webViewController: webViewController
-        )
+        context.coordinator.update(server: server, webViewController: webViewController)
+        context.coordinator.attach(to: viewController.view.window?.windowScene)
     }
 
     static func dismantleUIViewController(_ viewController: UIViewController, coordinator: Coordinator) {
@@ -38,10 +31,10 @@ struct MacWebViewTitleBar: UIViewControllerRepresentable {
 }
 
 private final class MacWebViewTitleBarViewController: UIViewController {
-    private let updateToolbar: (MacWebViewTitleBarViewController) -> Void
+    private let attachToolbar: (UIWindowScene?) -> Void
 
-    init(updateToolbar: @escaping (MacWebViewTitleBarViewController) -> Void) {
-        self.updateToolbar = updateToolbar
+    init(attachToolbar: @escaping (UIWindowScene?) -> Void) {
+        self.attachToolbar = attachToolbar
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -58,7 +51,7 @@ private final class MacWebViewTitleBarViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        updateToolbar(self)
+        attachToolbar(view.window?.windowScene)
     }
 }
 
@@ -75,20 +68,34 @@ extension MacWebViewTitleBar {
             static let serverPickerHorizontalPadding: CGFloat = 8
         }
 
+        // Gestures excluding no-op, already existing toolbar actions and
+        // Smart back, which is not available as a toolbar action
+        private static let gestureActions: [HAGestureAction] = HAGestureAction.allCases.filter { ![
+            .none,
+            .nextPage,
+            .backPage,
+            .smartBack
+        ].contains($0) }
+
         private weak var webViewController: WebViewController?
         private weak var titlebar: UITitlebar?
         private weak var serverPickerItem: NSMenuToolbarItem?
         private var toolbar: NSToolbar?
         private var server: Server?
+        private var macToolbarItems: [MagicItem] = []
+        private var macToolbarConfigObserver: NSObjectProtocol?
 
-        func configure(
-            windowScene: UIWindowScene?,
-            server: Server,
-            webViewController: WebViewController?
-        ) {
+        func update(server: Server, webViewController: WebViewController?) {
             self.server = server
             self.webViewController = webViewController
 
+            loadMacToolbarItems()
+            observeMacToolbarConfigChanges()
+
+            refreshToolbarState()
+        }
+
+        func attach(to windowScene: UIWindowScene?) {
             guard let titlebar = windowScene?.titlebar else { return }
             self.titlebar = titlebar
 
@@ -108,14 +115,71 @@ extension MacWebViewTitleBar {
                 self.toolbar = toolbar
             }
 
+            refreshToolbarState()
+        }
+
+        private func refreshToolbarState() {
+            guard let toolbar, titlebar?.toolbar === toolbar else { return }
             updateEnabledItems()
             updateServerPicker()
         }
 
         func removeToolbar() {
+            if let macToolbarConfigObserver {
+                NotificationCenter.default.removeObserver(macToolbarConfigObserver)
+                self.macToolbarConfigObserver = nil
+            }
             guard titlebar?.toolbar === toolbar else { return }
             titlebar?.toolbar = nil
             toolbar = nil
+        }
+
+        private func loadMacToolbarItems() {
+            do {
+                macToolbarItems = try MacToolbarConfig.config()?.items ?? []
+            } catch {
+                Current.Log.error("Failed to load Mac toolbar config: \(error.localizedDescription)")
+                macToolbarItems = []
+            }
+        }
+
+        private func observeMacToolbarConfigChanges() {
+            guard macToolbarConfigObserver == nil else { return }
+            macToolbarConfigObserver = NotificationCenter.default.addObserver(
+                forName: .macToolbarConfigDidChange,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let change = notification.userInfo?[MacToolbarConfigChange.userInfoKey] as? MacToolbarConfigChange
+                self?.handleMacToolbarConfigChanged(change)
+            }
+        }
+
+        private func handleMacToolbarConfigChanged(_ change: MacToolbarConfigChange?) {
+            loadMacToolbarItems()
+            guard let toolbar, titlebar?.toolbar === toolbar else { return }
+
+            switch change {
+            case let .added(item):
+                let identifier = NSToolbarItem.Identifier(magicItem: item)
+                if !toolbar.items.contains(where: { $0.itemIdentifier == identifier }) {
+                    toolbar.insertItem(withItemIdentifier: identifier, at: toolbar.items.count)
+                }
+            case let .removed(item):
+                let identifier = NSToolbarItem.Identifier(magicItem: item)
+                if let index = toolbar.items.firstIndex(where: { $0.itemIdentifier == identifier }) {
+                    toolbar.removeItem(at: index)
+                }
+            case nil:
+                let desiredIdentifiers = Set(macToolbarItems.map { NSToolbarItem.Identifier(magicItem: $0) })
+                for index in toolbar.items.indices.reversed() {
+                    let identifier = toolbar.items[index].itemIdentifier
+                    guard identifier.isEntityIdentifier, !desiredIdentifiers.contains(identifier) else { continue }
+                    toolbar.removeItem(at: index)
+                }
+            }
+
+            updateEnabledItems()
         }
 
         func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -177,7 +241,12 @@ extension MacWebViewTitleBar {
             case .homeAssistantServerPicker:
                 serverPickerToolbarItem(identifier: itemIdentifier, willBeInserted: flag)
             default:
-                nil
+                if let magicItem = macToolbarItem(for: itemIdentifier)
+                    ?? reconstructedEntityItem(for: itemIdentifier) {
+                    entityToolbarItem(for: magicItem, identifier: itemIdentifier)
+                } else {
+                    gestureToolbarItem(for: itemIdentifier)
+                }
             }
         }
 
@@ -219,8 +288,28 @@ extension MacWebViewTitleBar {
             if Current.servers.all.count > 1 {
                 identifiers.append(.homeAssistantServerPicker)
             }
+            identifiers.append(contentsOf: Self.gestureActions.map { NSToolbarItem.Identifier(gestureAction: $0) })
+            identifiers.append(contentsOf: macToolbarItems.map { NSToolbarItem.Identifier(magicItem: $0) })
             identifiers.append(contentsOf: [.space, .flexibleSpace])
             return identifiers
+        }
+
+        private func macToolbarItem(for identifier: NSToolbarItem.Identifier) -> MagicItem? {
+            if let item = macToolbarItems.first(where: { NSToolbarItem.Identifier(magicItem: $0) == identifier }) {
+                return item
+            }
+            guard identifier.magicItemComponents != nil else { return nil }
+            loadMacToolbarItems()
+            return macToolbarItems.first { NSToolbarItem.Identifier(magicItem: $0) == identifier }
+        }
+
+        /// A toolbar sharing our identifier forms a family with the toolbars of other windows; NSToolbar
+        /// synchronously asks every family member's delegate to materialize a newly inserted item. A sibling
+        /// whose cached `macToolbarItems` is stale would otherwise return `nil` here, which makes NSToolbar
+        /// raise an uncatchable assertion. Rebuild a minimal item straight from the identifier so we never do.
+        private func reconstructedEntityItem(for identifier: NSToolbarItem.Identifier) -> MagicItem? {
+            guard let components = identifier.magicItemComponents else { return nil }
+            return MagicItem(id: components.entityId, serverId: components.serverId, type: .entity)
         }
 
         private func serverPickerToolbarItem(
@@ -288,6 +377,85 @@ extension MacWebViewTitleBar {
             return UIMenu(title: L10n.WebView.ServerSelection.title, children: actions)
         }
 
+        private func gestureToolbarItem(for identifier: NSToolbarItem.Identifier) -> NSToolbarItem? {
+            guard let action = identifier.gestureAction else { return nil }
+            return toolbarItem(
+                identifier: identifier,
+                label: action.localizedString,
+                symbol: symbol(for: action),
+                action: #selector(performGestureAction(_:))
+            )
+        }
+
+        private func symbol(for action: HAGestureAction) -> SFSymbol {
+            switch action {
+            case .showSidebar:
+                .sidebarLeft
+            case .quickSearch:
+                .magnifyingglass
+            case .searchEntities:
+                .lightbulb
+            case .searchDevices:
+                .memorychip
+            case .searchCommands:
+                .command
+            case .assist:
+                .sparkles
+            case .backPage:
+                .arrowUturnBackward
+            case .nextPage:
+                .arrowUturnForward
+            case .smartBack:
+                .arrowUturnBackward
+            case .showServersList:
+                .serverRack
+            case .nextServer:
+                .arrowRightToLine
+            case .previousServer:
+                .arrowLeftToLine
+            case .showSettings:
+                .gear
+            case .openDebug:
+                .ladybug
+            case .none:
+                .questionmark
+            }
+        }
+
+        private func entityToolbarItem(
+            for magicItem: MagicItem,
+            identifier: NSToolbarItem.Identifier
+        ) -> NSToolbarItem {
+            let label = magicItem.displayText ?? magicItem.id
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.label = label
+            item.paletteLabel = label
+            item.toolTip = entityToolbarToolTip(for: magicItem, label: label)
+            item.image = entityToolbarImage(for: magicItem)
+            item.target = self
+            item.action = #selector(openEntityToolbarItem(_:))
+            item.visibilityPriority = Constants.highVisibilityPriority
+            return item
+        }
+
+        /// Hover help for an entity button: the entity name followed by the shared `Area • Device`
+        /// context line (see `HAAppEntity.contextualSubtitle`), matching what pickers show elsewhere.
+        private func entityToolbarToolTip(for magicItem: MagicItem, label: String) -> String {
+            guard let context = HAAppEntity.entity(id: magicItem.id, serverId: magicItem.serverId)?
+                .contextualSubtitle, !context.isEmpty, context != label else {
+                return label
+            }
+            return "\(label) • \(context)"
+        }
+
+        /// Renders the entity's own MDI icon (captured when it was added, see
+        /// `EntityAddToHandler.addToMacToolbar`) as a template image, matching the other toolbar buttons.
+        private func entityToolbarImage(for magicItem: MagicItem) -> UIImage {
+            let icon = MaterialDesignIcons(named: magicItem.customization?.icon ?? "", fallback: .dotsGridIcon)
+            return icon.image(ofSize: Constants.imageCanvasSize, color: .label)
+                .withRenderingMode(.alwaysTemplate)
+        }
+
         private func toolbarItem(
             identifier: NSToolbarItem.Identifier,
             label: String,
@@ -348,6 +516,22 @@ extension MacWebViewTitleBar {
         @objc private func openServerInSafari() {
             webViewController?.openServerInSafari()
         }
+
+        @objc private func performGestureAction(_ sender: NSToolbarItem) {
+            guard let action = sender.itemIdentifier.gestureAction else { return }
+            webViewController?.webViewGestureHandler.handleGestureAction(action)
+        }
+
+        @objc private func openEntityToolbarItem(_ sender: NSToolbarItem) {
+            guard let magicItem = macToolbarItem(for: sender.itemIdentifier),
+                  let url = AppConstants.openEntityDeeplinkURL(
+                      entityId: magicItem.id,
+                      serverId: magicItem.serverId
+                  ) else { return }
+            Current.sceneManager.appCoordinator.done { coordinator in
+                IncomingURLHandler(coordinator: coordinator).handle(url: url)
+            }
+        }
     }
 }
 
@@ -359,16 +543,39 @@ private extension NSToolbarItem.Identifier {
     static let homeAssistantPaste = NSToolbarItem.Identifier("io.home-assistant.webview.paste")
     static let homeAssistantOpenInSafari = NSToolbarItem.Identifier("io.home-assistant.webview.open-in-safari")
     static let homeAssistantServerPicker = NSToolbarItem.Identifier("io.home-assistant.webview.server-picker")
+
+    private static let gesturePrefix = "io.home-assistant.webview.gesture."
+    private static let entityPrefix = "io.home-assistant.webview.entity."
+
+    init(gestureAction: HAGestureAction) {
+        self.init(Self.gesturePrefix + gestureAction.rawValue)
+    }
+
+    var gestureAction: HAGestureAction? {
+        guard rawValue.hasPrefix(Self.gesturePrefix) else { return nil }
+        return HAGestureAction(rawValue: String(rawValue.dropFirst(Self.gesturePrefix.count)))
+    }
+
+    init(magicItem: MagicItem) {
+        self.init(Self.entityPrefix + magicItem.serverId + "::" + magicItem.id)
+    }
+
+    var isEntityIdentifier: Bool {
+        rawValue.hasPrefix(Self.entityPrefix)
+    }
+
+    var magicItemComponents: (serverId: String, entityId: String)? {
+        guard rawValue.hasPrefix(Self.entityPrefix) else { return nil }
+        let payload = String(rawValue.dropFirst(Self.entityPrefix.count))
+        guard let separator = payload.range(of: "::") else { return nil }
+        return (String(payload[payload.startIndex ..< separator.lowerBound]), String(payload[separator.upperBound...]))
+    }
 }
 #else
 extension MacWebViewTitleBar {
     final class Coordinator: NSObject {
-        func configure(
-            windowScene: UIWindowScene?,
-            server: Server,
-            webViewController: WebViewController?
-        ) {}
-
+        func update(server: Server, webViewController: WebViewController?) {}
+        func attach(to windowScene: UIWindowScene?) {}
         func removeToolbar() {}
     }
 }
